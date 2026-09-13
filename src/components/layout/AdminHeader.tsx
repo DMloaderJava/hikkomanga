@@ -1,0 +1,61 @@
+import { Link } from '@tanstack/react-router';
+import { Library, Tag, ArrowLeft, LogOut } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { auth } from '@/data/auth';
+
+export function AdminHeader() {
+  const handleLogout = async () => {
+    await auth.signOut();
+    window.location.href = '/admin/login';
+  };
+
+  return (
+    <header className="sticky top-0 z-40 border-b border-neutral-800 bg-neutral-900/90 backdrop-blur-md">
+      <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
+        <div className="flex items-center gap-6">
+          <Link to="/" className="flex items-center gap-2 group text-neutral-400 hover:text-white text-xs font-medium border-r border-neutral-800 pr-4">
+            <ArrowLeft className="h-4 w-4" />
+            <span className="hidden sm:inline">На сайт</span>
+          </Link>
+
+          <Link to="/admin" className="flex items-center gap-2">
+            <span className="text-lg font-bold text-white tracking-wide">
+              Hikko<span className="text-rose-500">Admin</span>
+            </span>
+          </Link>
+
+          <nav className="hidden md:flex items-center gap-1 text-sm">
+            <Link
+              to="/admin/titles"
+              className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-neutral-400 hover:bg-neutral-800 hover:text-white transition-colors"
+              activeProps={{ className: 'bg-rose-950/50 text-rose-400 font-medium border border-rose-900/50' }}
+            >
+              <Library className="h-4 w-4" />
+              Тайтлы
+            </Link>
+            <Link
+              to="/admin/genres"
+              className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-neutral-400 hover:bg-neutral-800 hover:text-white transition-colors"
+              activeProps={{ className: 'bg-rose-950/50 text-rose-400 font-medium border border-rose-900/50' }}
+            >
+              <Tag className="h-4 w-4" />
+              Жанры
+            </Link>
+          </nav>
+        </div>
+
+        <div className="flex items-center gap-3">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleLogout}
+            className="text-neutral-400 hover:text-white gap-2"
+          >
+            <LogOut className="h-4 w-4" />
+            <span className="hidden sm:inline">Выйти</span>
+          </Button>
+        </div>
+      </div>
+    </header>
+  );
+}
