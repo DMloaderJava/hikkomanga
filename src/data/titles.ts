@@ -164,19 +164,35 @@ export const titles = {
       }
 
       if (genre_ids !== undefined) {
-        const { error: unlinkError } = await supabase
-          .from('title_genres')
-          .delete()
-          .eq('title_id', id);
-        if (unlinkError) {
-          console.warn('[titles] не удалось сбросить жанры:', unlinkError.message);
-        }
         if (genre_ids.length > 0) {
-          const { error: linkError } = await supabase
+          // 1. Сначала вставляем новые связи: если INSERT упадёт, старые жанры
+          //    останутся на месте — состояние деградирует к предыдущему, а не к пустому.
+          const { error: insertError } = await supabase
             .from('title_genres')
-            .insert(genre_ids.map((genre_id) => ({ title_id: id, genre_id })));
-          if (linkError) {
-            console.warn('[titles] не удалось привязать жанры:', linkError.message);
+            .upsert(
+              genre_ids.map((genre_id) => ({ title_id: id, genre_id })),
+              { onConflict: 'title_id,genre_id', ignoreDuplicates: true }
+            );
+
+          if (insertError) {
+            console.warn('[titles] не удалось привязать жанры:', insertError.message);
+          } else {
+            // 2. Только после успешного INSERT убираем жанры, которых нет в новом списке
+            const { error: deleteError } = await supabase
+              .from('title_genres')
+              .delete()
+              .eq('title_id', id)
+              .not('genre_id', 'in', `(${genre_ids.join(',')})`);
+
+            if (deleteError) {
+              console.warn('[titles] не удалось убрать старые жанры:', deleteError.message);
+            }
+          }
+        } else {
+          // Пустой список → убираем все жанры
+          const { error } = await supabase.from('title_genres').delete().eq('title_id', id);
+          if (error) {
+            console.warn('[titles] не удалось сбросить жанры:', error.message);
           }
         }
       }

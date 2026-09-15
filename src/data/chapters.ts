@@ -65,12 +65,9 @@ export const chapters = {
   },
 
   async create(input: ChapterInput): Promise<Chapter> {
-    const duplicate = await this.getByNumber(input.title_id, Number(input.number));
-    if (duplicate) {
-      throw new DuplicateChapterError(Number(input.number));
-    }
-
     if (isSupabaseConfigured) {
+      // Supabase сам поймает дубликат через UNIQUE (title_id, number) — код 23505.
+      // Предварительный SELECT не нужен: лишний RTT и race condition.
       const { data, error } = await supabase
         .from('chapters')
         .insert({
@@ -91,6 +88,7 @@ export const chapters = {
       return data;
     }
 
+    // mockStore не имеет constraint — проверяет дубликат сам
     return mockStore.createChapter(input);
   },
 
@@ -105,16 +103,6 @@ export const chapters = {
         const current = await this.getById(id);
         if (!current) throw new Error('Глава не найдена');
         return current;
-      }
-
-      if (updateData.number !== undefined) {
-        const chapter = await this.getById(id);
-        if (chapter) {
-          const duplicate = await this.getByNumber(chapter.title_id, updateData.number);
-          if (duplicate && duplicate.id !== id) {
-            throw new DuplicateChapterError(updateData.number);
-          }
-        }
       }
 
       const { data, error } = await supabase

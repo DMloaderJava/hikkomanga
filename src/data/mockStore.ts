@@ -1,12 +1,13 @@
 import type { Title, Chapter, Page, Genre, TitleInput, ChapterInput, PageInput } from './types';
 import { DuplicateChapterError } from './types';
+import { generatePlaceholderCover } from '@/lib/placeholder-cover';
 
 /** Локальные демо-медиа лежат в public/media (см. public/media/ATTRIBUTION.md). */
 const asset = (path: string) => `${import.meta.env.BASE_URL}${path}`;
 
 /** При смене версии сидов старый localStorage сбрасывается, иначе новые
  *  обложки/страницы никогда не доедут до браузера пользователя. */
-const SEED_VERSION = '2';
+const SEED_VERSION = '3';
 const SEED_KEYS = ['manga_genres', 'manga_titles', 'manga_chapters', 'manga_pages'];
 
 const INITIAL_GENRES: Genre[] = [
@@ -28,7 +29,7 @@ const INITIAL_TITLES: Title[] = [
     title: 'Поднятие уровня в одиночку',
     author: 'Chugong',
     description: '10 лет назад открылись Врата, соединившие наш мир с миром монстров. С тех пор некоторые люди обрели сверхспособности. Их называют Охотниками.',
-    cover_url: asset('media/covers/solo-leveling.jpg'),
+    cover_url: generatePlaceholderCover('Поднятие уровня в одиночку'),
     status: 'completed',
     published: true,
     created_at: new Date(Date.now() - 86400000 * 10).toISOString(),
@@ -40,7 +41,7 @@ const INITIAL_TITLES: Title[] = [
     title: 'Магическая битва',
     author: 'Гэгэ Акутами',
     description: 'Старшеклассник Юдзи Итадори обладает выдающейся физической силой. Однажды в руки членов оккультного клуба попадает проклятый предмет высокой опасности...',
-    cover_url: asset('media/covers/jujutsu-kaisen.jpg'),
+    cover_url: generatePlaceholderCover('Магическая битва'),
     status: 'ongoing',
     published: true,
     created_at: new Date(Date.now() - 86400000 * 5).toISOString(),
@@ -52,7 +53,7 @@ const INITIAL_TITLES: Title[] = [
     title: 'Клинок, рассекающий демонов',
     author: 'Коёхару Готогэ',
     description: 'Эпоха Тайсё. Тандзиро Камадо отправляется в путь, чтобы вернуть человеческий облик своей сестре Нэдзуко и уничтожить демона, погубившего их семью.',
-    cover_url: asset('media/covers/kimetsu-no-yaiba.jpg'),
+    cover_url: generatePlaceholderCover('Клинок, рассекающий демонов'),
     status: 'completed',
     published: true,
     created_at: new Date(Date.now() - 86400000 * 2).toISOString(),

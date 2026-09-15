@@ -3,7 +3,7 @@ import type { Genre } from '@/data/types';
 import { genres as genresApi } from '@/data/genres';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Dialog } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog';
 import { Tag, Plus, Edit2, Trash2, Check, X, AlertTriangle } from 'lucide-react';
 
 export function GenreManager() {
@@ -207,31 +207,39 @@ export function GenreManager() {
         open={!!deleteConfirmGenre}
         onOpenChange={(open) => !open && setDeleteConfirmGenre(null)}
       >
-        <div className="space-y-4">
-          <div className="flex items-center gap-3 text-amber-500">
-            <AlertTriangle className="h-6 w-6" />
-            <h3 className="text-lg font-bold text-white">Удаление жанра</h3>
-          </div>
-
-          <p className="text-sm text-neutral-300">
-            Вы уверены, что хотите удалить жанр <strong className="text-white">«{deleteConfirmGenre?.name}»</strong>?
-          </p>
-
-          {usageCount > 0 && (
-            <div className="rounded-lg border border-amber-800/50 bg-amber-950/30 p-3 text-xs text-amber-300">
-              Этот жанр сейчас используется в {usageCount} тайтлах. При удалении он будет автоматически отвязан от них.
+        <DialogContent className="max-w-md">
+          <div className="space-y-4">
+            <div className="flex items-start gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-950/60 text-amber-500">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div className="space-y-1.5 pr-6">
+                <DialogTitle className="text-lg font-bold text-white">
+                  Удаление жанра
+                </DialogTitle>
+                <DialogDescription className="text-sm text-neutral-300">
+                  Вы уверены, что хотите удалить жанр{' '}
+                  <strong className="text-white">«{deleteConfirmGenre?.name}»</strong>?
+                </DialogDescription>
+              </div>
             </div>
-          )}
 
-          <div className="flex justify-end gap-3 pt-4">
-            <Button variant="outline" size="sm" onClick={() => setDeleteConfirmGenre(null)}>
-              Отмена
-            </Button>
-            <Button variant="destructive" size="sm" onClick={handleConfirmDelete}>
-              Да, удалить
-            </Button>
+            {usageCount > 0 && (
+              <div className="rounded-lg border border-amber-800/50 bg-amber-950/30 p-3 text-xs text-amber-300">
+                Этот жанр сейчас используется в {usageCount} тайтлах. При удалении он будет автоматически отвязан от них.
+              </div>
+            )}
+
+            <div className="flex justify-end gap-3 pt-1">
+              <Button variant="outline" size="sm" onClick={() => setDeleteConfirmGenre(null)}>
+                Отмена
+              </Button>
+              <Button variant="destructive" size="sm" onClick={handleConfirmDelete}>
+                Да, удалить
+              </Button>
+            </div>
           </div>
-        </div>
+        </DialogContent>
       </Dialog>
     </div>
   );
