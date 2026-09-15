@@ -1,5 +1,18 @@
 import { supabase, isSupabaseConfigured } from './client';
 import { mockStore } from './mockStore';
+import { notifyAdminLogin } from './notify';
+
+/**
+ * Уведомление о входе не должно ни ломать, ни замедлять вход: fire-and-forget.
+ * Транспорт и секреты — см. src/data/notify.ts и SETUP_SUPABASE.md.
+ */
+function fireLoginNotify(adminEmail: string) {
+  void notifyAdminLogin(adminEmail).then((r) => {
+    if (!r.ok && import.meta.env.DEV) {
+      console.warn('[login-notify] письмо не отправлено:', r.error);
+    }
+  });
+}
 
 /**
  * Демо-сессия для режима без Supabase. Реальных паролей в коде нет и не было:
@@ -34,6 +47,7 @@ export const auth = {
         });
         if (!error && data?.session) {
           mockStore.setAdminSession(data.session);
+          fireLoginNotify(cleanEmail);
           return { data, error: null };
         }
         if (error) {
@@ -62,6 +76,7 @@ export const auth = {
 
     const { mockUser, mockSession } = createMockSession(cleanEmail);
     mockStore.setAdminSession(mockSession);
+    fireLoginNotify(cleanEmail);
     return { data: { user: mockUser, session: mockSession }, error: null };
   },
 

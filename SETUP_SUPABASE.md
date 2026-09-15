@@ -111,7 +111,49 @@ email и пароль — это заглушка для локальной ра
 в коде нет. В продакшене всегда используется Supabase Auth; демо-fallback
 отключён автоматически при наличии `VITE_SUPABASE_URL` и ключа.
 
-## 6. Если брать встроенный бэкенд Lovable (Cloud), а не свой проект
+## 6. Login Guard: письмо владельцу при входе админа
+
+После каждого успешного входа через кнопку «Войти» владелец сайта получает
+письмо: аккаунт, время, IP, браузер и кнопки «Подтвердить — это я» /
+«Это не я». Вход письмо **не блокирует** (это уведомление, не 2FA): ошибка
+отправки максимум пишется warn'ом в консоль.
+
+Транспорты по приоритету:
+
+1. **Supabase Edge Function `login-notify`** (прод) — шлёт через Resend,
+   требует валидную сессию с ролью `admin` (иначе 401/403).
+2. **Dev-мидлварь Vite `/api/login-notify`** — читает `.env` в корне репо;
+   если `RESEND_API_KEY` нет, письмо **эмулируется** (консол dev-сервера +
+   preview в ответе), чтобы флоу можно было развивать без ключей.
+3. В проде без Supabase эндпоинта нет → уведомление тихо отключается.
+
+### Настройка
+
+Локально (`.env` в корне, файл в `.gitignore`):
+
+```bash
+OWNER_NOTIFY_EMAIL=babaevafarida8@gmail.com
+RESEND_API_KEY=re_xxxxxxxxxxxx   # без ключа — эмуляция
+```
+
+Прод (секреты живут в Supabase, не в репозитории):
+
+```bash
+supabase functions deploy login-notify --project-ref <project-ref>
+supabase secrets set RESEND_API_KEY=re_xxxxxxxxxxxx \
+  OWNER_NOTIFY_EMAIL=babaevafarida8@gmail.com \
+  --project-ref <project-ref>
+```
+
+Отправитель по умолчанию — `Hikkomanga Login Guard <onboarding@resend.dev>`
+(домен Resend для тестов). Для отправки с собственного домена подтвердите его
+в Resend и задайте `OWNER_NOTIFY_FROM`.
+
+Шаблон письма — `src/lib/loginMailTemplate.ts` (общий для Edge-функции и
+dev-транспорта). Клиентская точка входа — `src/data/notify.ts`, вызов —
+`fireLoginNotify()` в `src/data/auth.ts` (fire-and-forget).
+
+## 7. Если брать встроенный бэкенд Lovable (Cloud), а не свой проект
 
 Lovable Cloud — это отдельный управляемый бэкенд (он «использует open-source
 основу Supabase», но это не ваш Supabase-проект). У него другие переменные,
