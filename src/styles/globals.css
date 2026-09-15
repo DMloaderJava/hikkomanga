@@ -37,3 +37,72 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #404040;
 }
+
+/* ── Browser autofill ──────────────────────────────────────────────
+   Chrome / Safari / Edge paint autofilled fields (email, password) with
+   their own light background through an internal rule that a normal
+   `background-color` cannot beat. On this dark theme it shows up as a
+   bright yellow/blue box around the "Email" field on /admin/login.
+
+   The workaround: cover the field with a huge inset box-shadow in its own
+   background colour and force `-webkit-text-fill-color` — both of which the
+   autofill styling *does* respect.
+
+   NOTE: `--autofill-swatch` looks pointless, but do not delete it. The webkit
+   and standard blocks below have otherwise identical declarations, and the CSS
+   minifier in the Vite/rolldown build then folds `input:-webkit-autofill` into
+   `input:autofill` and drops it — which is exactly the selector Chrome needs.
+   The differing custom property keeps the two blocks distinct.               */
+:root {
+  --input-bg: #171717;   /* neutral-900 — same fill the Input/Textarea use */
+  --input-fg: #f5f5f5;   /* neutral-100 */
+}
+
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus,
+input:-webkit-autofill:active,
+textarea:-webkit-autofill,
+textarea:-webkit-autofill:hover,
+textarea:-webkit-autofill:focus,
+select:-webkit-autofill,
+select:-webkit-autofill:hover,
+select:-webkit-autofill:focus {
+  --autofill-swatch: webkit;
+  -webkit-box-shadow: 0 0 0 100rem var(--input-bg) inset;
+  box-shadow: 0 0 0 100rem var(--input-bg) inset;
+  -webkit-text-fill-color: var(--input-fg);
+  caret-color: var(--input-fg);
+  background-image: none;
+  /* never let the browser animate back to its own light fill */
+  -webkit-transition: background-color 999999s ease-in-out 0s;
+  transition: background-color 999999s ease-in-out 0s;
+}
+
+/* A focused autofilled field loses its Tailwind focus ring, because that ring
+   is itself a box-shadow and the fill above overwrites box-shadow. Draw the
+   ring with an outline instead so the two never collide.                    */
+input:autofill:focus-visible,
+textarea:autofill:focus-visible,
+select:autofill:focus-visible {
+  --autofill-swatch: focused;
+  outline: 2px solid #f43f5e; /* rose-500, matches focus-visible:ring-rose-500 */
+  outline-offset: -1px;
+}
+
+/* Standard `:autofill` — Chrome 110+, Firefox */
+input:autofill,
+input:autofill:hover,
+input:autofill:focus,
+textarea:autofill,
+textarea:autofill:hover,
+textarea:autofill:focus,
+select:autofill {
+  --autofill-swatch: standard;
+  box-shadow: 0 0 0 100rem var(--input-bg) inset;
+  -webkit-text-fill-color: var(--input-fg);
+  color: var(--input-fg);
+  caret-color: var(--input-fg);
+  background-image: none;
+  transition: background-color 999999s ease-in-out 0s;
+}
