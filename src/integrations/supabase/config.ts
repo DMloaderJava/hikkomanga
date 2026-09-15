@@ -1,3 +1,40 @@
-export const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL ?? '';
-export const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY ?? '';
+/**
+ * Supabase connection settings.
+ *
+ * The key can arrive under different names depending on where the app is built:
+ *   - VITE_SUPABASE_ANON_KEY        → classic Supabase project (.env / Vercel)
+ *   - VITE_SUPABASE_PUBLISHABLE_KEY → what Lovable injects when a Supabase
+ *                                     project is connected through its
+ *                                     integration (new `sb_publishable_...` keys)
+ *   - VITE_SUPABASE_SERVICE_KEY     → never use a service key in the browser,
+ *                                     deliberately NOT read here
+ * Both the legacy anon JWT (`eyJ...`) and the new publishable key
+ * (`sb_publishable_...`) are valid for `createClient`, so we just take
+ * whichever one is present.
+ */
+const env = import.meta.env as Record<string, string | undefined>;
+
+export const SUPABASE_URL = env.VITE_SUPABASE_URL ?? '';
+
+export const SUPABASE_ANON_KEY =
+  env.VITE_SUPABASE_ANON_KEY ||
+  env.VITE_SUPABASE_PUBLISHABLE_KEY ||
+  env.VITE_SUPABASE_PUBLIC_KEY ||
+  '';
+
+/** Lovable also exposes the project reference; handy for links to the dashboard. */
+export const SUPABASE_PROJECT_ID = env.VITE_SUPABASE_PROJECT_ID ?? '';
+
 export const isSupabaseConfigured = Boolean(SUPABASE_URL && SUPABASE_ANON_KEY);
+
+/* Without these variables every data module silently degrades to the
+   localStorage mockStore, which looks exactly like a working app — you only
+   notice when data disappears on another device. Shout about it in dev. */
+if (!isSupabaseConfigured && env.DEV) {
+  console.warn(
+    '[supabase] VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY (или ' +
+      'VITE_SUPABASE_PUBLISHABLE_KEY) не заданы — приложение работает на ' +
+      'локальном mockStore в localStorage, а не на реальной базе. ' +
+      'См. SETUP_SUPABASE.md.'
+  );
+}

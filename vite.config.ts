@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
+import { buildLoginMailHtml, buildLoginMailSubject } from './src/lib/loginMailTemplate.ts';
 import path from 'path';
 import { fileURLToPath } from 'node:url';
 
@@ -125,6 +126,72 @@ export default defineConfig(({ mode }) => {
             }
 
             next();
+          });
+        },
+      },
+      {
+        name: 'login-notify-middleware',
+        configureServer(server) {
+          server.middlewares.use(async (req, res, next) => {
+            if (!req.url?.startsWith('/api/login-notify') || req.method !== 'POST') {
+              return next();
+            }
+
+            const send = (code: number, obj: unknown) => {
+              res.statusCode = code;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify(obj));
+            };
+
+            let bodyStr = '';
+            req.on('data', (chunk) => (bodyStr += chunk));
+            req.on('end', async () => {
+              try {
+                const payload = JSON.parse(bodyStr || '{}');
+                const to = env.OWNER_NOTIFY_EMAIL || process.env.OWNER_NOTIFY_EMAIL;
+                const apiKey = env.RESEND_API_KEY || process.env.RESEND_API_KEY;
+                const from =
+                  env.OWNER_NOTIFY_FROM ||
+                  process.env.OWNER_NOTIFY_FROM ||
+                  'Hikkomanga Login Guard <onboarding@resend.dev>';
+
+                if (!to) {
+                  send(500, { ok: false, error: 'OWNER_NOTIFY_EMAIL не задан в .env' });
+                  return;
+                }
+
+                const subject = buildLoginMailSubject(payload);
+                const html = buildLoginMailHtml(payload);
+
+                // Без ключа Resend письмо некуда слать — эмулируем:
+                // печатаем в консоль dev-сервера и отдаём preview клиенту.
+                if (!apiKey) {
+                  console.log(`\n[login-notify] ЭМУЛЯЦИЯ письма → ${to}\n${subject}\n`);
+                  send(200, { ok: true, emulated: true, preview: { to, from, subject, html } });
+                  return;
+                }
+
+                const resendRes = await fetch('https://api.resend.com/emails', {
+                  method: 'POST',
+                  headers: {
+                    Authorization: `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({ from, to: [to], subject, html }),
+                });
+                const data = await resendRes.json().catch(() => null);
+                if (!resendRes.ok) {
+                  send(502, {
+                    ok: false,
+                    error: (data as any)?.message || `Resend HTTP ${resendRes.status}`,
+                  });
+                  return;
+                }
+                send(200, { ok: true, id: (data as any)?.id });
+              } catch (err: any) {
+                send(500, { ok: false, error: err.message });
+              }
+            });
           });
         },
       },

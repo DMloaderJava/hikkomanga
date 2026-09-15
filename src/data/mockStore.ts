@@ -1,4 +1,14 @@
 import type { Title, Chapter, Page, Genre, TitleInput, ChapterInput, PageInput } from './types';
+import { DuplicateChapterError } from './types';
+import { generatePlaceholderCover } from '@/lib/placeholder-cover';
+
+/** Локальные демо-медиа лежат в public/media (см. public/media/ATTRIBUTION.md). */
+const asset = (path: string) => `${import.meta.env.BASE_URL}${path}`;
+
+/** При смене версии сидов старый localStorage сбрасывается, иначе новые
+ *  обложки/страницы никогда не доедут до браузера пользователя. */
+const SEED_VERSION = '3';
+const SEED_KEYS = ['manga_genres', 'manga_titles', 'manga_chapters', 'manga_pages'];
 
 const INITIAL_GENRES: Genre[] = [
   { id: 'g-1', name: 'Экшен' },
@@ -19,7 +29,7 @@ const INITIAL_TITLES: Title[] = [
     title: 'Поднятие уровня в одиночку',
     author: 'Chugong',
     description: '10 лет назад открылись Врата, соединившие наш мир с миром монстров. С тех пор некоторые люди обрели сверхспособности. Их называют Охотниками.',
-    cover_url: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=600&auto=format&fit=crop&q=80',
+    cover_url: generatePlaceholderCover('Поднятие уровня в одиночку'),
     status: 'completed',
     published: true,
     created_at: new Date(Date.now() - 86400000 * 10).toISOString(),
@@ -31,7 +41,7 @@ const INITIAL_TITLES: Title[] = [
     title: 'Магическая битва',
     author: 'Гэгэ Акутами',
     description: 'Старшеклассник Юдзи Итадори обладает выдающейся физической силой. Однажды в руки членов оккультного клуба попадает проклятый предмет высокой опасности...',
-    cover_url: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=600&auto=format&fit=crop&q=80',
+    cover_url: generatePlaceholderCover('Магическая битва'),
     status: 'ongoing',
     published: true,
     created_at: new Date(Date.now() - 86400000 * 5).toISOString(),
@@ -43,7 +53,7 @@ const INITIAL_TITLES: Title[] = [
     title: 'Клинок, рассекающий демонов',
     author: 'Коёхару Готогэ',
     description: 'Эпоха Тайсё. Тандзиро Камадо отправляется в путь, чтобы вернуть человеческий облик своей сестре Нэдзуко и уничтожить демона, погубившего их семью.',
-    cover_url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=600&auto=format&fit=crop&q=80',
+    cover_url: generatePlaceholderCover('Клинок, рассекающий демонов'),
     status: 'completed',
     published: true,
     created_at: new Date(Date.now() - 86400000 * 2).toISOString(),
@@ -103,78 +113,20 @@ const INITIAL_CHAPTERS: Chapter[] = [
 ];
 
 const INITIAL_PAGES: Page[] = [
-  {
-    id: 'p-1-1',
-    chapter_id: 'c-1',
-    image_url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=1200&auto=format&fit=crop&q=80',
-    original_url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=1200&auto=format&fit=crop&q=80',
-    page_order: 1,
-  },
-  {
-    id: 'p-1-2',
-    chapter_id: 'c-1',
-    image_url: 'https://images.unsplash.com/photo-1563089145-599997674d42?w=1200&auto=format&fit=crop&q=80',
-    original_url: 'https://images.unsplash.com/photo-1563089145-599997674d42?w=1200&auto=format&fit=crop&q=80',
-    page_order: 2,
-  },
-  {
-    id: 'p-1-3',
-    chapter_id: 'c-1',
-    image_url: 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?w=1200&auto=format&fit=crop&q=80',
-    original_url: 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?w=1200&auto=format&fit=crop&q=80',
-    page_order: 3,
-  },
-  {
-    id: 'p-2-1',
-    chapter_id: 'c-2',
-    image_url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1200&auto=format&fit=crop&q=80',
-    original_url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1200&auto=format&fit=crop&q=80',
-    page_order: 1,
-  },
-  {
-    id: 'p-2-2',
-    chapter_id: 'c-2',
-    image_url: 'https://images.unsplash.com/photo-1541701494587-cb58502866ab?w=1200&auto=format&fit=crop&q=80',
-    original_url: 'https://images.unsplash.com/photo-1541701494587-cb58502866ab?w=1200&auto=format&fit=crop&q=80',
-    page_order: 2,
-  },
-  {
-    id: 'p-3-1',
-    chapter_id: 'c-3',
-    image_url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1200&auto=format&fit=crop&q=80',
-    original_url: 'https://images.unsplash.com/photo-1518709268805-4e9042af9f23?w=1200&auto=format&fit=crop&q=80',
-    page_order: 1,
-  },
-  {
-    id: 'p-4-1',
-    chapter_id: 'c-4',
-    image_url: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=1200&auto=format&fit=crop&q=80',
-    original_url: 'https://images.unsplash.com/photo-1607604276583-eef5d076aa5f?w=1200&auto=format&fit=crop&q=80',
-    page_order: 1,
-  },
-  {
-    id: 'p-4-2',
-    chapter_id: 'c-4',
-    image_url: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200&auto=format&fit=crop&q=80',
-    original_url: 'https://images.unsplash.com/photo-1578632767115-351597cf2477?w=1200&auto=format&fit=crop&q=80',
-    page_order: 2,
-  },
-  {
-    id: 'p-5-1',
-    chapter_id: 'c-5',
-    image_url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200&auto=format&fit=crop&q=80',
-    original_url: 'https://images.unsplash.com/photo-1618005182384-a83a8bd57fbe?w=1200&auto=format&fit=crop&q=80',
-    page_order: 1,
-  },
-  {
-    id: 'p-6-1',
-    chapter_id: 'c-6',
-    image_url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=1200&auto=format&fit=crop&q=80',
-    original_url: 'https://images.unsplash.com/photo-1534447677768-be436bb09401?w=1200&auto=format&fit=crop&q=80',
-    page_order: 1,
-  },
+  // Главы «Поднятия уровня» (c-1…c-3)
+  { id: 'p-1-1', chapter_id: 'c-1', image_url: asset('media/pages/hokusai-travelers.jpg'), original_url: asset('media/pages/hokusai-travelers.jpg'), page_order: 1 },
+  { id: 'p-1-2', chapter_id: 'c-1', image_url: asset('media/pages/hokusai-vol6-wrestlers.jpg'), original_url: asset('media/pages/hokusai-vol6-wrestlers.jpg'), page_order: 2 },
+  { id: 'p-1-3', chapter_id: 'c-1', image_url: asset('media/pages/hokusai-demon-monk.jpg'), original_url: asset('media/pages/hokusai-demon-monk.jpg'), page_order: 3 },
+  { id: 'p-2-1', chapter_id: 'c-2', image_url: asset('media/pages/hokusai-bathing.jpg'), original_url: asset('media/pages/hokusai-bathing.jpg'), page_order: 1 },
+  { id: 'p-2-2', chapter_id: 'c-2', image_url: asset('media/pages/hokusai-vol1-spread.jpg'), original_url: asset('media/pages/hokusai-vol1-spread.jpg'), page_order: 2 },
+  { id: 'p-3-1', chapter_id: 'c-3', image_url: asset('media/pages/hokusai-demon-monk.jpg'), original_url: asset('media/pages/hokusai-demon-monk.jpg'), page_order: 1 },
+  // «Магическая битва» (c-4…c-5)
+  { id: 'p-4-1', chapter_id: 'c-4', image_url: asset('media/pages/hokusai-vol6-crop.jpg'), original_url: asset('media/pages/hokusai-vol6-crop.jpg'), page_order: 1 },
+  { id: 'p-4-2', chapter_id: 'c-4', image_url: asset('media/pages/hokusai-travelers.jpg'), original_url: asset('media/pages/hokusai-travelers.jpg'), page_order: 2 },
+  { id: 'p-5-1', chapter_id: 'c-5', image_url: asset('media/pages/hokusai-bathing.jpg'), original_url: asset('media/pages/hokusai-bathing.jpg'), page_order: 1 },
+  // «Клинок, рассекающий демонов» (c-6)
+  { id: 'p-6-1', chapter_id: 'c-6', image_url: asset('media/pages/hokusai-vol6-wrestlers.jpg'), original_url: asset('media/pages/hokusai-vol6-wrestlers.jpg'), page_order: 1 },
 ];
-
 class LocalStore {
   private genres: Genre[];
   private titles: Title[];
@@ -183,6 +135,16 @@ class LocalStore {
   private adminSession: any = null;
 
   constructor() {
+    if (typeof window !== 'undefined') {
+      try {
+        if (localStorage.getItem('manga_seed_version') !== SEED_VERSION) {
+          SEED_KEYS.forEach((k) => localStorage.removeItem(k));
+          localStorage.setItem('manga_seed_version', SEED_VERSION);
+        }
+      } catch {
+        // private mode etc. — simply start from defaults
+      }
+    }
     this.genres = this.load('manga_genres', INITIAL_GENRES);
     this.titles = this.load('manga_titles', INITIAL_TITLES);
     this.chapters = this.load('manga_chapters', INITIAL_CHAPTERS);
@@ -356,6 +318,13 @@ class LocalStore {
   }
 
   createChapter(input: ChapterInput): Chapter {
+    const duplicate = this.chapters.find(
+      (c) => c.title_id === input.title_id && Number(c.number) === Number(input.number)
+    );
+    if (duplicate) {
+      throw new DuplicateChapterError(Number(input.number));
+    }
+
     const newChapter: Chapter = {
       id: 'c-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
       title_id: input.title_id,
@@ -375,6 +344,15 @@ class LocalStore {
     if (index === -1) throw new Error('Chapter not found');
 
     const current = this.chapters[index];
+
+    if (input.number !== undefined && Number(input.number) !== Number(current.number)) {
+      const duplicate = this.chapters.find(
+        (c) => c.title_id === current.title_id && Number(c.number) === Number(input.number)
+      );
+      if (duplicate) {
+        throw new DuplicateChapterError(Number(input.number));
+      }
+    }
     const updated: Chapter = {
       ...current,
       number: input.number !== undefined ? Number(input.number) : current.number,

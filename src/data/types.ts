@@ -83,3 +83,10 @@ export class SlugConflictError extends Error {
   }
 }
 
+export class DuplicateChapterError extends Error {
+  constructor(number: number) {
+    super(`Глава с номером ${number} у этого тайтла уже существует.`);
+    this.name = 'DuplicateChapterError';
+  }
+}
+

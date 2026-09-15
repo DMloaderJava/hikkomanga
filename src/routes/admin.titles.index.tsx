@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
-import { Library, Plus, Search, Edit, Layers, Trash2, ExternalLink } from 'lucide-react';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Library, Plus, Search, Edit, Layers, Trash2, ExternalLink, AlertCircle } from 'lucide-react';
 import type { Title } from '@/data/types';
 
 export const Route = createFileRoute('/admin/titles/')({
@@ -19,23 +20,34 @@ function AdminTitlesIndexPage() {
   const { titles } = Route.useLoaderData() as { titles: Title[] };
   const [search, setSearch] = useState('');
   const [titleList, setTitleList] = useState<Title[]>(titles);
+  const [deleteTarget, setDeleteTarget] = useState<Title | null>(null);
+  const [pendingToggleId, setPendingToggleId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const handleTogglePublish = async (id: string) => {
+    setError(null);
+    setPendingToggleId(id);
     try {
       const updated = await titlesApi.togglePublish(id);
       setTitleList((prev) => prev.map((t) => (t.id === id ? updated : t)));
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      setError(err.message || 'Не удалось изменить статус публикации');
+    } finally {
+      setPendingToggleId(null);
     }
   };
 
-  const handleDelete = async (id: string, titleName: string) => {
-    if (!confirm(`Вы уверены, что хотите удалить тайтл «${titleName}» и все его главы?`)) return;
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    setError(null);
+    const id = deleteTarget.id;
     try {
       await titlesApi.delete(id);
       setTitleList((prev) => prev.filter((t) => t.id !== id));
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      // закрываем диалог и показываем причину в баннере над таблицей
+      setDeleteTarget(null);
+      setError(err.message || 'Не удалось удалить тайтл');
     }
   };
 
@@ -66,6 +78,13 @@ function AdminTitlesIndexPage() {
         </div>
       </div>
 
+      {error && (
+        <div className="flex items-center gap-2 rounded-xl border border-red-800/80 bg-red-950/40 p-3 text-sm text-red-400">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
       {/* Search Bar */}
       <div className="relative max-w-md">
         <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
@@ -91,6 +110,15 @@ function AdminTitlesIndexPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-neutral-800/60">
+            {filteredTitles.length === 0 && (
+              <tr>
+                <td colSpan={5} className="px-6 py-12 text-center text-sm text-neutral-500">
+                  {titleList.length === 0
+                    ? 'Тайтлов пока нет. Нажмите «Добавить тайтл», чтобы создать первый.'
+                    : 'Ничего не найдено по вашему запросу.'}
+                </td>
+              </tr>
+            )}
             {filteredTitles.map((t) => (
               <tr key={t.id} className="hover:bg-neutral-800/40 transition-colors">
                 <td className="px-6 py-4">
@@ -124,9 +152,13 @@ function AdminTitlesIndexPage() {
 
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-2">
-                    <Switch checked={t.published} onCheckedChange={() => handleTogglePublish(t.id)} />
+                    <Switch
+                      checked={t.published}
+                      disabled={pendingToggleId === t.id}
+                      onCheckedChange={() => handleTogglePublish(t.id)}
+                    />
                     <span className="text-xs text-neutral-400">
-                      {t.published ? 'Опубликован' : 'Черновик'}
+                      {pendingToggleId === t.id ? 'Сохранение...' : t.published ? 'Опубликован' : 'Черновик'}
                     </span>
                   </div>
                 </td>
@@ -156,7 +188,7 @@ function AdminTitlesIndexPage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => handleDelete(t.id, t.title)}
+                      onClick={() => setDeleteTarget(t)}
                       className="h-8 w-8 p-0 text-neutral-400 hover:text-red-400 hover:bg-red-950/40"
                       title="Удалить"
                     >
@@ -169,6 +201,23 @@ function AdminTitlesIndexPage() {
           </tbody>
         </table>
       </div>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title={`Удалить тайтл «${deleteTarget?.title ?? ''}»?`}
+        description={
+          <>
+            Вместе с тайтлом будут безвозвратно удалены все его главы, страницы,
+            озвучки и загруженные файлы (обложка и изображения в хранилище).
+            Действие нельзя отменить.
+          </>
+        }
+        confirmLabel="Удалить тайтл"
+        onConfirm={handleDelete}
+      />
     </main>
   );
 }

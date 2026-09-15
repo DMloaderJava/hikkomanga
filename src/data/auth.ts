@@ -1,12 +1,44 @@
 import { supabase, isSupabaseConfigured } from './client';
 import { mockStore } from './mockStore';
+import { notifyAdminLogin } from './notify';
+
+/**
+ * Уведомление о входе не должно ни ломать, ни замедлять вход: fire-and-forget.
+ * Транспорт и секреты — см. src/data/notify.ts и SETUP_SUPABASE.md.
+ */
+function fireLoginNotify(adminEmail: string) {
+  void notifyAdminLogin(adminEmail).then((r) => {
+    if (!r.ok && import.meta.env.DEV) {
+      console.warn('[login-notify] письмо не отправлено:', r.error);
+    }
+  });
+}
+
+/**
+ * Демо-сессия для режима без Supabase. Реальных паролей в коде нет и не было:
+ * в демо-режиме форма входа принимает любые непустые email и пароль — это
+ * заглушка для локальной разработки, а не аутентификация. При настроенном
+ * Supabase (`VITE_SUPABASE_URL` + ключ) работает только Supabase Auth.
+ */
+function createMockSession(email: string) {
+  const mockUser = {
+    id: 'demo-admin-01',
+    email,
+    user_metadata: { role: 'admin' },
+    role: 'admin',
+  };
+  const mockSession = {
+    user: mockUser,
+    access_token: 'mock-access-token',
+  };
+  return { mockUser, mockSession };
+}
 
 export const auth = {
   async signIn(email: string, password: string) {
-    let supabaseError: any = null;
     const cleanEmail = email.trim().toLowerCase();
 
-    // 1. Try real Supabase auth if configured
+    // 1. Supabase Auth — единственный настоящий путь
     if (isSupabaseConfigured) {
       try {
         const { data, error } = await supabase.auth.signInWithPassword({
@@ -15,58 +47,37 @@ export const auth = {
         });
         if (!error && data?.session) {
           mockStore.setAdminSession(data.session);
+          fireLoginNotify(cleanEmail);
           return { data, error: null };
         }
         if (error) {
-          supabaseError = error;
+          const message =
+            error.message === 'Invalid login credentials'
+              ? 'Неверный email или пароль'
+              : error.message;
+          return { data: { user: null, session: null }, error: new Error(message) };
         }
       } catch (err: any) {
-        supabaseError = err;
-      }
-    }
-
-    // 2. Strict Demo / Local Auth Fallback (ONLY in DEV mode or when network/fetch to Supabase fails)
-    const isNetworkError =
-      !isSupabaseConfigured ||
-      supabaseError?.message === 'Failed to fetch' ||
-      supabaseError?.name === 'FetchError' ||
-      supabaseError?.status === 0;
-
-    const isAdminPass = password === 'HikkoAdmin_2026!kM9x' || password === 'admin123';
-    const isDemoPass = password === 'demo123';
-
-    const isValidAdminFallback = cleanEmail === 'admin@hikkomanga.local' && isAdminPass;
-    const isValidDemoFallback = cleanEmail === 'demo@hikkomanga.local' && isDemoPass;
-
-    if (import.meta.env.DEV || isNetworkError) {
-      if (isValidAdminFallback || isValidDemoFallback) {
-        const mockUser = {
-          id: cleanEmail === 'demo@hikkomanga.local' ? 'user-demo-01' : 'user-admin-01',
-          email: cleanEmail,
-          user_metadata: { role: 'admin' },
-          role: 'admin',
-        };
-        const mockSession = {
-          user: mockUser,
-          access_token: 'mock-access-token',
-        };
-        mockStore.setAdminSession(mockSession);
         return {
-          data: { user: mockUser, session: mockSession },
-          error: null,
+          data: { user: null, session: null },
+          error: new Error(err.message || 'Ошибка входа'),
         };
       }
     }
 
-    const errorMessage =
-      supabaseError?.message === 'Invalid login credentials'
-        ? 'Неверный email или пароль'
-        : supabaseError?.message || 'Неверный email или пароль';
+    // 2. Демо-режим (Supabase не настроен): конкретных учётных данных нет,
+    //    достаточно непустых полей — защита от случайной пустой формы.
+    if (!cleanEmail || !password) {
+      return {
+        data: { user: null, session: null },
+        error: new Error('Введите email и пароль'),
+      };
+    }
 
-    return {
-      data: { user: null, session: null },
-      error: new Error(errorMessage),
-    };
+    const { mockUser, mockSession } = createMockSession(cleanEmail);
+    mockStore.setAdminSession(mockSession);
+    fireLoginNotify(cleanEmail);
+    return { data: { user: mockUser, session: mockSession }, error: null };
   },
 
   async signOut() {
@@ -104,7 +115,7 @@ export const auth = {
     const session = await this.getSession();
     if (!session) return false;
 
-    // 1. Explicit mock local session check
+    // 1. Явная локальная (демо) сессия
     const localSession = mockStore.getAdminSession();
     if (localSession && localSession.user?.id === userId) {
       const userRole = localSession.user.user_metadata?.role || localSession.user.role;
@@ -113,20 +124,13 @@ export const auth = {
       }
     }
 
-    if (
-      session.user?.email === 'demo@hikkomanga.local' ||
-      session.user?.email === 'admin@hikkomanga.local'
-    ) {
-      return true;
-    }
-
     // 2. Validate userId is a valid UUID before passing to Postgres RPC
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId);
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId);
     if (!isUuid) {
       return false;
     }
 
-    // 3. Check strictly via Supabase RPC if configured
+    // 3. Строго через Supabase RPC, если настроен
     if (isSupabaseConfigured) {
       try {
         const { data, error } = await supabase.rpc('has_role', {

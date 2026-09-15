@@ -23,56 +23,50 @@ export const genres = {
 
   async create(name: string): Promise<Genre> {
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase
-          .from('genres')
-          .insert({ name: name.trim() })
-          .select()
-          .single();
+      const { data, error } = await supabase
+        .from('genres')
+        .insert({ name: name.trim() })
+        .select()
+        .single();
 
-        if (!error && data) {
-          mockStore.createGenre(name);
-          return data;
+      if (error) {
+        if (error.code === '23505') {
+          throw new Error(`Жанр «${name.trim()}» уже существует.`);
         }
-      } catch {
-        // Fallback
+        throw new Error(`Не удалось создать жанр: ${error.message}`);
       }
+      return data;
     }
     return mockStore.createGenre(name);
   },
 
   async update(id: string, name: string): Promise<Genre> {
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase
-          .from('genres')
-          .update({ name: name.trim() })
-          .eq('id', id)
-          .select()
-          .single();
+      const { data, error } = await supabase
+        .from('genres')
+        .update({ name: name.trim() })
+        .eq('id', id)
+        .select()
+        .single();
 
-        if (!error && data) {
-          mockStore.updateGenre(id, name);
-          return data;
+      if (error) {
+        if (error.code === '23505') {
+          throw new Error(`Жанр «${name.trim()}» уже существует.`);
         }
-      } catch {
-        // Fallback
+        throw new Error(`Не удалось переименовать жанр: ${error.message}`);
       }
+      return data;
     }
     return mockStore.updateGenre(id, name);
   },
 
   async delete(id: string): Promise<void> {
     if (isSupabaseConfigured) {
-      try {
-        const { error } = await supabase.from('genres').delete().eq('id', id);
-        if (!error) {
-          mockStore.deleteGenre(id);
-          return;
-        }
-      } catch {
-        // Fallback
+      const { error } = await supabase.from('genres').delete().eq('id', id);
+      if (error) {
+        throw new Error(`Не удалось удалить жанр: ${error.message}`);
       }
+      return;
     }
     mockStore.deleteGenre(id);
   },

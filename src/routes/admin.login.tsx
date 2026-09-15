@@ -72,13 +72,16 @@ function AdminLoginPage() {
           </div>
         )}
 
-        <form onSubmit={handleLogin} className="space-y-4">
+        <form onSubmit={handleLogin} className="space-y-4" autoComplete="on">
           <div>
             <Label htmlFor="email">Email</Label>
             <Input
               id="email"
+              name="email"
               type="email"
-              placeholder="admin@hikkomanga.local"
+              inputMode="email"
+              autoComplete="username"
+              placeholder="admin@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               required
@@ -90,7 +93,9 @@ function AdminLoginPage() {
             <Label htmlFor="password">Пароль</Label>
             <Input
               id="password"
+              name="password"
               type="password"
+              autoComplete="current-password"
               placeholder="••••••••"
               value={password}
               onChange={(e) => setPassword(e.target.value)}

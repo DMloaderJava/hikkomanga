@@ -106,10 +106,15 @@ export function useVoiceover(chapterId: string, pages: Page[]) {
   };
 
   const resetVoiceover = async () => {
-    await voiceoverApi.deleteVoiceover(chapterId, voiceover?.audio_url);
-    setVoiceover(null);
-    setLines([]);
-    setStatus('idle');
+    setError(null);
+    try {
+      await voiceoverApi.deleteVoiceover(chapterId, voiceover?.audio_url);
+      setVoiceover(null);
+      setLines([]);
+      setStatus('idle');
+    } catch (err: any) {
+      setError(err.message || 'Ошибка удаления озвучки');
+    }
   };
 
   return {

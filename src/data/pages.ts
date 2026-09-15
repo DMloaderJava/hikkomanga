@@ -44,46 +44,38 @@ export const pages = {
 
   async create(input: PageInput): Promise<Page> {
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase
-          .from('pages')
-          .insert({
-            chapter_id: input.chapter_id,
-            image_url: input.image_url,
-            original_url: input.original_url || null,
-            page_order: input.page_order,
-          })
-          .select()
-          .single();
+      const { data, error } = await supabase
+        .from('pages')
+        .insert({
+          chapter_id: input.chapter_id,
+          image_url: input.image_url,
+          original_url: input.original_url || null,
+          page_order: input.page_order,
+        })
+        .select()
+        .single();
 
-        if (!error && data) {
-          mockStore.createPage(input);
-          return data;
-        }
-      } catch {
-        // Fallback
+      if (error) {
+        throw new Error(`Не удалось добавить страницу: ${error.message}`);
       }
+      return data;
     }
     return mockStore.createPage(input);
   },
 
   async updateOrder(pageOrders: { id: string; page_order: number }[], chapterId: string): Promise<void> {
     if (isSupabaseConfigured) {
-      try {
-        const updates = pageOrders.map((item) => ({
-          id: item.id,
-          chapter_id: chapterId,
-          page_order: item.page_order,
-        }));
+      const updates = pageOrders.map((item) => ({
+        id: item.id,
+        chapter_id: chapterId,
+        page_order: item.page_order,
+      }));
 
-        const { error } = await supabase.from('pages').upsert(updates, { onConflict: 'id' });
-        if (!error) {
-          mockStore.updatePageOrders(chapterId, pageOrders);
-          return;
-        }
-      } catch {
-        // Fallback
+      const { error } = await supabase.from('pages').upsert(updates, { onConflict: 'id' });
+      if (error) {
+        throw new Error(`Не удалось сохранить порядок страниц: ${error.message}`);
       }
+      return;
     }
     mockStore.updatePageOrders(chapterId, pageOrders);
   },
@@ -91,19 +83,19 @@ export const pages = {
   async delete(id: string): Promise<void> {
     const targetPage = (await this.getById(id)) || mockStore.getPageById(id);
     if (targetPage) {
-      await storage.deletePage(targetPage.image_url, targetPage.original_url);
+      try {
+        await storage.deletePage(targetPage.image_url, targetPage.original_url);
+      } catch (e) {
+        console.warn('[pages] не удалось удалить файлы страницы:', e);
+      }
     }
 
     if (isSupabaseConfigured) {
-      try {
-        const { error } = await supabase.from('pages').delete().eq('id', id);
-        if (!error) {
-          mockStore.deletePage(id);
-          return;
-        }
-      } catch {
-        // Fallback
+      const { error } = await supabase.from('pages').delete().eq('id', id);
+      if (error) {
+        throw new Error(`Не удалось удалить страницу: ${error.message}`);
       }
+      return;
     }
     mockStore.deletePage(id);
   },
