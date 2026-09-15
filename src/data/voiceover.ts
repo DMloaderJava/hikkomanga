@@ -60,23 +60,16 @@ export const voiceoverApi = {
     };
 
     if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase
-          .from('chapter_voiceovers')
-          .upsert(record, { onConflict: 'chapter_id' })
-          .select()
-          .single();
+      const { data, error } = await supabase
+        .from('chapter_voiceovers')
+        .upsert(record, { onConflict: 'chapter_id' })
+        .select()
+        .single();
 
-        if (!error && data) {
-          const savedRecord = data as ChapterVoiceover;
-          const local = loadLocalVoiceovers().filter((v) => v.chapter_id !== chapterId);
-          local.push(savedRecord);
-          saveLocalVoiceovers(local);
-          return savedRecord;
-        }
-      } catch {
-        // Fallback
+      if (error) {
+        throw new Error(`Не удалось сохранить озвучку: ${error.message}`);
       }
+      return data as ChapterVoiceover;
     }
 
     const localRecord: ChapterVoiceover = {
@@ -101,11 +94,14 @@ export const voiceoverApi = {
     }
 
     if (isSupabaseConfigured) {
-      try {
-        await supabase.from('chapter_voiceovers').delete().eq('chapter_id', chapterId);
-      } catch {
-        // Fallback
+      const { error } = await supabase
+        .from('chapter_voiceovers')
+        .delete()
+        .eq('chapter_id', chapterId);
+      if (error) {
+        throw new Error(`Не удалось удалить озвучку: ${error.message}`);
       }
+      return;
     }
 
     const local = loadLocalVoiceovers().filter((v) => v.chapter_id !== chapterId);

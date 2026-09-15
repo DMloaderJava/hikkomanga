@@ -1,4 +1,5 @@
 import type { Title, Chapter, Page, Genre, TitleInput, ChapterInput, PageInput } from './types';
+import { DuplicateChapterError } from './types';
 
 /** Локальные демо-медиа лежат в public/media (см. public/media/ATTRIBUTION.md). */
 const asset = (path: string) => `${import.meta.env.BASE_URL}${path}`;
@@ -316,6 +317,13 @@ class LocalStore {
   }
 
   createChapter(input: ChapterInput): Chapter {
+    const duplicate = this.chapters.find(
+      (c) => c.title_id === input.title_id && Number(c.number) === Number(input.number)
+    );
+    if (duplicate) {
+      throw new DuplicateChapterError(Number(input.number));
+    }
+
     const newChapter: Chapter = {
       id: 'c-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
       title_id: input.title_id,
@@ -335,6 +343,15 @@ class LocalStore {
     if (index === -1) throw new Error('Chapter not found');
 
     const current = this.chapters[index];
+
+    if (input.number !== undefined && Number(input.number) !== Number(current.number)) {
+      const duplicate = this.chapters.find(
+        (c) => c.title_id === current.title_id && Number(c.number) === Number(input.number)
+      );
+      if (duplicate) {
+        throw new DuplicateChapterError(Number(input.number));
+      }
+    }
     const updated: Chapter = {
       ...current,
       number: input.number !== undefined ? Number(input.number) : current.number,

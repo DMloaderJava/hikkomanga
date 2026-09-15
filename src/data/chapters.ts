@@ -3,7 +3,7 @@ import { mockStore } from './mockStore';
 import { pages as pagesApi } from './pages';
 import { storage } from './storage';
 import { voiceoverApi } from './voiceover';
-import type { Chapter, ChapterInput } from './types';
+import { DuplicateChapterError, type Chapter, type ChapterInput } from './types';
 
 export const chapters = {
   async listByTitle(titleId: string, includeDrafts = false): Promise<Chapter[]> {
@@ -65,59 +65,84 @@ export const chapters = {
   },
 
   async create(input: ChapterInput): Promise<Chapter> {
-    if (isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase
-          .from('chapters')
-          .insert({
-            title_id: input.title_id,
-            number: Number(input.number),
-            name: input.name || null,
-            published: input.published ?? false,
-          })
-          .select()
-          .single();
-
-        if (!error && data) {
-          mockStore.createChapter(input);
-          return data;
-        }
-      } catch {
-        // Fallback
-      }
+    const duplicate = await this.getByNumber(input.title_id, Number(input.number));
+    if (duplicate) {
+      throw new DuplicateChapterError(Number(input.number));
     }
+
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase
+        .from('chapters')
+        .insert({
+          title_id: input.title_id,
+          number: Number(input.number),
+          name: input.name || null,
+          published: input.published ?? false,
+        })
+        .select()
+        .single();
+
+      if (error) {
+        if (error.code === '23505') {
+          throw new DuplicateChapterError(Number(input.number));
+        }
+        throw new Error(`Не удалось создать главу: ${error.message}`);
+      }
+      return data;
+    }
+
     return mockStore.createChapter(input);
   },
 
   async update(id: string, input: Partial<ChapterInput>): Promise<Chapter> {
     if (isSupabaseConfigured) {
-      try {
-        const updateData: any = {};
-        if (input.number !== undefined) updateData.number = Number(input.number);
-        if (input.name !== undefined) updateData.name = input.name;
-        if (input.published !== undefined) updateData.published = input.published;
+      const updateData: any = {};
+      if (input.number !== undefined) updateData.number = Number(input.number);
+      if (input.name !== undefined) updateData.name = input.name;
+      if (input.published !== undefined) updateData.published = input.published;
 
-        const { data, error } = await supabase
-          .from('chapters')
-          .update(updateData)
-          .eq('id', id)
-          .select()
-          .single();
-
-        if (!error && data) {
-          mockStore.updateChapter(id, input);
-          return data;
-        }
-      } catch {
-        // Fallback
+      if (Object.keys(updateData).length === 0) {
+        const current = await this.getById(id);
+        if (!current) throw new Error('Глава не найдена');
+        return current;
       }
+
+      if (updateData.number !== undefined) {
+        const chapter = await this.getById(id);
+        if (chapter) {
+          const duplicate = await this.getByNumber(chapter.title_id, updateData.number);
+          if (duplicate && duplicate.id !== id) {
+            throw new DuplicateChapterError(updateData.number);
+          }
+        }
+      }
+
+      const { data, error } = await supabase
+        .from('chapters')
+        .update(updateData)
+        .eq('id', id)
+        .select()
+        .single();
+
+      if (error) {
+        if (error.code === '23505') {
+          throw new DuplicateChapterError(updateData.number);
+        }
+        throw new Error(`Не удалось сохранить главу: ${error.message}`);
+      }
+      return data;
     }
+
     return mockStore.updateChapter(id, input);
   },
 
   async delete(id: string): Promise<void> {
     const existingVo = await voiceoverApi.getByChapter(id);
-    await voiceoverApi.deleteVoiceover(id, existingVo?.audio_url);
+    try {
+      await voiceoverApi.deleteVoiceover(id, existingVo?.audio_url);
+    } catch (e) {
+      console.warn('[chapters] не удалось удалить озвучку главы:', e);
+    }
 
     const chapterPages = await pagesApi.listByChapter(id);
     await Promise.allSettled(
@@ -125,16 +150,13 @@ export const chapters = {
     );
 
     if (isSupabaseConfigured) {
-      try {
-        const { error } = await supabase.from('chapters').delete().eq('id', id);
-        if (!error) {
-          mockStore.deleteChapter(id);
-          return;
-        }
-      } catch {
-        // Fallback
+      const { error } = await supabase.from('chapters').delete().eq('id', id);
+      if (error) {
+        throw new Error(`Не удалось удалить главу: ${error.message}`);
       }
+      return;
     }
+
     mockStore.deleteChapter(id);
   },
 

@@ -5,7 +5,8 @@ import { chapters as chaptersApi } from '@/data/chapters';
 import { ChapterForm } from '@/components/admin/ChapterForm';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { ArrowLeft, Layers, Plus, Trash2, BookOpen, FileImage } from 'lucide-react';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { ArrowLeft, Layers, Plus, Trash2, BookOpen, FileImage, AlertCircle } from 'lucide-react';
 import type { Title, Chapter, ChapterInput } from '@/data/types';
 import { formatChapterNumber, formatDate } from '@/lib/format';
 
@@ -26,36 +27,48 @@ function AdminTitleChaptersPage() {
   const [chapterList, setChapterList] = useState<Chapter[]>(chapters);
   const [showAddForm, setShowAddForm] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Chapter | null>(null);
+  const [pendingToggleId, setPendingToggleId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const handleCreateChapter = async (input: ChapterInput) => {
     setIsSubmitting(true);
+    setError(null);
     try {
       const created = await chaptersApi.create(input);
       setChapterList((prev) => [...prev, created].sort((a, b) => a.number - b.number));
       setShowAddForm(false);
-    } catch (err: any) {
-      alert(err.message || 'Ошибка создания главы');
+    } catch (err) {
+      // ошибку покажет сама форма главы (у неё свой inline-баннер)
+      throw err;
     } finally {
       setIsSubmitting(false);
     }
   };
 
   const handleTogglePublish = async (chapterId: string, currentPublished: boolean) => {
+    setError(null);
+    setPendingToggleId(chapterId);
     try {
       const updated = await chaptersApi.update(chapterId, { published: !currentPublished });
       setChapterList((prev) => prev.map((c) => (c.id === chapterId ? updated : c)));
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      setError(err.message || 'Не удалось изменить статус главы');
+    } finally {
+      setPendingToggleId(null);
     }
   };
 
-  const handleDeleteChapter = async (chapterId: string, number: number) => {
-    if (!confirm(`Вы уверены, что хотите удалить главу ${number}?`)) return;
+  const handleDeleteChapter = async () => {
+    if (!deleteTarget) return;
+    setError(null);
+    const chapterId = deleteTarget.id;
     try {
       await chaptersApi.delete(chapterId);
       setChapterList((prev) => prev.filter((c) => c.id !== chapterId));
-    } catch (err) {
-      console.error(err);
+    } catch (err: any) {
+      setDeleteTarget(null);
+      setError(err.message || 'Не удалось удалить главу');
     }
   };
 
@@ -77,7 +90,10 @@ function AdminTitleChaptersPage() {
         </div>
 
         <Button
-          onClick={() => setShowAddForm(!showAddForm)}
+          onClick={() => {
+            setError(null);
+            setShowAddForm(!showAddForm);
+          }}
           variant={showAddForm ? 'secondary' : 'default'}
           className="gap-2 shrink-0"
         >
@@ -85,6 +101,13 @@ function AdminTitleChaptersPage() {
           {showAddForm ? 'Скрыть форму' : 'Добавить главу'}
         </Button>
       </div>
+
+      {error && (
+        <div className="flex items-center gap-2 rounded-xl border border-red-800/80 bg-red-950/40 p-3 text-sm text-red-400">
+          <AlertCircle className="h-4 w-4 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
 
       {showAddForm && (
         <div className="space-y-2">
@@ -140,10 +163,11 @@ function AdminTitleChaptersPage() {
                     <div className="flex items-center gap-2">
                       <Switch
                         checked={ch.published}
+                        disabled={pendingToggleId === ch.id}
                         onCheckedChange={() => handleTogglePublish(ch.id, ch.published)}
                       />
                       <span className="text-xs text-neutral-400">
-                        {ch.published ? 'Опубликована' : 'Черновик'}
+                        {pendingToggleId === ch.id ? 'Сохранение...' : ch.published ? 'Опубликована' : 'Черновик'}
                       </span>
                     </div>
                   </td>
@@ -162,7 +186,7 @@ function AdminTitleChaptersPage() {
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => handleDeleteChapter(ch.id, ch.number)}
+                        onClick={() => setDeleteTarget(ch)}
                         className="h-8 w-8 p-0 text-neutral-400 hover:text-red-400 hover:bg-red-950/40"
                         title="Удалить главу"
                       >
@@ -176,6 +200,22 @@ function AdminTitleChaptersPage() {
           </table>
         )}
       </div>
+
+      <ConfirmDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+        title={`Удалить главу ${deleteTarget ? formatChapterNumber(deleteTarget.number) : ''}?`}
+        description={
+          <>
+            Будут удалены все страницы главы, их файлы в хранилище и озвучка.
+            Действие нельзя отменить.
+          </>
+        }
+        confirmLabel="Удалить главу"
+        onConfirm={handleDeleteChapter}
+      />
     </main>
   );
 }
