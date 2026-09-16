@@ -90,3 +90,61 @@ export class DuplicateChapterError extends Error {
   }
 }
 
+// ── Заявки администраторов ──────────────────────────────────────────────────
+
+export type RequestType =
+  | 'delete_title'
+  | 'delete_chapter'
+  | 'new_chapter'
+  | 'ad_request';
+
+export type RequestStatus = 'pending' | 'approved' | 'rejected';
+
+export interface AdminRequest {
+  id: string;
+  type: RequestType;
+  requester_id?: string | null;
+  target_id?: string;
+  target_name?: string;
+  payload: Record<string, unknown>;
+  status: RequestStatus;
+  resolved_by?: string;
+  resolved_at?: string;
+  reject_reason?: string;
+  note?: string;
+  created_at: string;
+}
+
+// ── Реклама ─────────────────────────────────────────────────────────────────
+
+export interface Ad {
+  id: string;
+  title: string;
+  description?: string;
+  image_url?: string;
+  link_url: string;
+  link_label: string;
+  placement: string;
+  /** false = выключен owner'ом; undefined в старых demo-записях = active */
+  active?: boolean;
+  advertiser_name?: string;
+  expires_at?: string;
+  created_at?: string;
+}
+
+// ── Ошибки ──────────────────────────────────────────────────────────────────
+
+export class RateLimitError extends Error {
+  /** Опциональный hint из Postgres RAISE ... USING HINT. */
+  hint?: string;
+
+  constructor(hintOrMessage?: string) {
+    super(
+      hintOrMessage?.trim() ||
+        'Слишком много заявок. Попробуйте позже.'
+    );
+    this.name = 'RateLimitError';
+    if (hintOrMessage) this.hint = hintOrMessage;
+  }
+}
+

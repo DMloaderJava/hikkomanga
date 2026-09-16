@@ -50,6 +50,19 @@ GEMINI_API_KEY=<ключ Gemini>   # только для AI-анализа и о
 2. `00000000000001_voiceovers.sql` — `chapter_voiceovers` + бакет `voiceovers`.
 3. `00000000000002_storage_buckets.sql` — бакеты `manga` (публичный) и
    `manga-originals` (приватный) + политики.
+4. `00000000000003_login_challenges.sql` — таблица `login_challenges` + RPC
+   `create_login_challenge` / `resolve_login_challenge` /
+   `latest_login_challenge_status` (обязательное подтверждение входа).
+5. `00000000000004_roles_and_requests.sql` — `has_role` (owner→admin), таблица
+   `admin_requests`, rate-limit trigger.
+6. `00000000000005_rate_limit_log.sql` — лог rate-limit.
+7. `00000000000006_ads.sql` — таблица `ads` + RLS.
+8. `00000000000007_apply_admin_request.sql` — триггер: approve → delete/create.
+9. `00000000000008_login_challenge_multidevice.sql` — Login Guard multi-device:
+   колонка `session_id` + `create_login_challenge(…, p_session_id)` /
+   `latest_login_challenge_status` фильтрует по JWT `session_id`.
+   Ноут (S1 approved) и телефон (S2 pending) независимы; новый login =
+   новый session_id = снова письмо. **Не** «любой approved навсегда».
 
 Если накатываете руками — держите файлы в репозитории в том же виде, чтобы
 Lovable не предложил «создать схему заново» и не наплодил дублей таблиц.
@@ -111,47 +124,126 @@ email и пароль — это заглушка для локальной ра
 в коде нет. В продакшене всегда используется Supabase Auth; демо-fallback
 отключён автоматически при наличии `VITE_SUPABASE_URL` и ключа.
 
-## 6. Login Guard: письмо владельцу при входе админа
+## 6. Login Guard: обязательное подтверждение входа
 
-После каждого успешного входа через кнопку «Войти» владелец сайта получает
-письмо: аккаунт, время, IP, браузер и кнопки «Подтвердить — это я» /
-«Это не я». Вход письмо **не блокирует** (это уведомление, не 2FA): ошибка
-отправки максимум пишется warn'ом в консоль.
+После верного пароля **вход ещё не открыт**. Владелец получает письмо на
+`OWNER_NOTIFY_EMAIL` (обязателен, без placeholder `@example.com`) со ссылками
+«Подтвердить — это я» / «Это не я». Пока challenge не в статусе `approved`,
+`hasRole(..., 'admin')` возвращает `false` и админ-роуты редиректят на
+`/admin/login` (экран ожидания).
 
-Транспорты по приоритету:
+Если письмо отправить не удалось — сессия сразу откатывается (`signOut`):
+**без письма подтверждения входа нет**.
 
-1. **Supabase Edge Function `login-notify`** (прод) — шлёт через Resend,
-   требует валидную сессию с ролью `admin` (иначе 401/403).
-2. **Dev-мидлварь Vite `/api/login-notify`** — читает `.env` в корне репо;
-   если `RESEND_API_KEY` нет, письмо **эмулируется** (консол dev-сервера +
-   preview в ответе), чтобы флоу можно было развивать без ключей.
-3. В проде без Supabase эндпоинта нет → уведомление тихо отключается.
+Флоу:
+
+1. `signIn` → пароль ок + роль admin.
+2. Edge/dev создаёт запись в `login_challenges` (status=`pending`, TTL 15 мин)
+   и шлёт письмо с токеном.
+3. Владелец открывает `/admin/login/confirm?token=…&action=approve|deny`.
+4. Устройство, с которого входили, polling'ом видит `approved` и пускает в
+   `/admin`. При `deny` / `expired` — выход.
+
+Миграция: `supabase/migrations/00000000000003_login_challenges.sql`.
+
+Транспорты:
+
+1. **Edge `login-notify`** + **`login-confirm`** (прод, Resend).
+2. **Dev-мидлварь Vite** `/api/login-notify`, `/api/login-confirm`,
+   `/api/login-challenge-status` — без `RESEND_API_KEY` письмо эмулируется
+   (консоль + кнопки «Подтвердить (dev)» на экране ожидания).
 
 ### Настройка
 
 Локально (`.env` в корне, файл в `.gitignore`):
 
 ```bash
-OWNER_NOTIFY_EMAIL=babaevafarida8@gmail.com
+OWNER_NOTIFY_EMAIL=you@yourdomain.com
 RESEND_API_KEY=re_xxxxxxxxxxxx   # без ключа — эмуляция
 ```
 
-Прод (секреты живут в Supabase, не в репозитории):
+Прод (секреты в Supabase, не в репозитории):
 
 ```bash
-supabase functions deploy login-notify --project-ref <project-ref>
+# 1) Секреты СНАЧАЛА (login-notify fail-fast без них)
 supabase secrets set RESEND_API_KEY=re_xxxxxxxxxxxx \
-  OWNER_NOTIFY_EMAIL=babaevafarida8@gmail.com \
+  OWNER_NOTIFY_EMAIL=you@yourdomain.com \
   --project-ref <project-ref>
+
+# 2) Миграции 03→08 ОДНИМ заходом (SQL Editor или db push).
+#    08 DROP'ает 5-arg create_login_challenge и ставит 6-arg + session_id.
+supabase db push
+# или вручную: 03_login_challenges … 08_login_challenge_multidevice.sql
+
+# 3) Edge СРАЗУ после миграций (в одной сессии, без захода в /admin/login между шагами).
+#    Окно: старый edge + новая схема (или наоборот) → login fail до redeploy.
+supabase functions deploy login-notify --project-ref <project-ref>
+supabase functions deploy login-confirm --project-ref <project-ref>
 ```
 
-Отправитель по умолчанию — `Hikkomanga Login Guard <onboarding@resend.dev>`
-(домен Resend для тестов). Для отправки с собственного домена подтвердите его
-в Resend и задайте `OWNER_NOTIFY_FROM`.
+**Порядок критичен для 08:** между `db push` и `functions deploy login-notify`
+не открывайте `/admin/login` — 5-arg/6-arg mismatch даёт «нет challenge» или
+«function does not exist» на ≤1 мин. Делайте 2→3 подряд.
 
-Шаблон письма — `src/lib/loginMailTemplate.ts` (общий для Edge-функции и
-dev-транспорта). Клиентская точка входа — `src/data/notify.ts`, вызов —
-`fireLoginNotify()` в `src/data/auth.ts` (fire-and-forget).
+Multi-device smoke (после деплоя, SQL Editor) —
+`supabase/scripts/smoke_login_challenge_session.sql`:
+`BEGIN` + `session_replication_role=replica` (обход FK) + вызов
+`latest_login_challenge_status()` под двумя JWT claims → 4× `PASS` + `ROLLBACK`.
+Если INSERT падает на FK — скрипт запущен не под superuser (откройте SQL Editor
+как postgres / Dashboard).
+
+Отправитель по умолчанию — `Hikkomanga Login Guard <onboarding@resend.dev>`.
+Для своего домена: подтвердите его в Resend и задайте `OWNER_NOTIFY_FROM`.
+
+Шаблон — `supabase/functions/_shared/loginMailTemplate.ts`. Клиент:
+`src/data/notify.ts` + `src/data/auth.ts` (`pendingConfirmation`).
+
+### Роли owner / admin и заявки
+
+- `owner` в `user_roles` автоматически проходит `has_role(uid, 'admin')`
+  (миграция `04_roles_and_requests.sql`).
+- Admin **не** удаляет тайтлы/главы напрямую: кнопка «Запросить удаление»
+  создаёт строку в `admin_requests`. Owner разбирает их в `/admin/requests`.
+- **Approve = apply** (миграция `07_apply_admin_request.sql`, BEFORE UPDATE):
+  - `delete_title` → `DELETE FROM titles` (каскад глав/страниц);
+  - `delete_chapter` → `DELETE FROM chapters`;
+  - `new_chapter` → `INSERT` черновика главы (`payload.suggested_number`);
+    retry-loop на `unique_violation` (UNIQUE `chapters(title_id, number)` —
+    уже в `00_init`, плюс идемпотентная страховка в `07`),
+    чтобы параллельный INSERT не ронял UPDATE заявки;
+    в `payload` пишутся `created_chapter_id` / `created_number`;
+  - `ad_request` → только status; баннер owner создаёт в `/admin/ads`.
+  - Триггер всегда пишет `resolved_at` / `resolved_by` (`COALESCE(..., auth.uid())`),
+    даже если UPDATE пришёл не из UI.
+  - Проверка UNIQUE перед продом:
+    ```sql
+    SELECT conname, pg_get_constraintdef(oid)
+    FROM pg_constraint
+    WHERE conrelid = 'public.chapters'::regclass AND contype = 'u';
+    ```
+- CRUD рекламы: `/admin/ads` (только owner). Публичная `/advertise` пишет
+  `type = ad_request` (можно без сессии).
+- Interstitial каждые 5 глав: `useChapterProgress` + `AdInterstitial`.
+
+### Login Guard без Resend (прод)
+
+Без `RESEND_API_KEY` + задеплоенного `login-notify` вход **невозможен**
+(by design: письмо = второй фактор). Форма `/admin/login` показывает
+подсказку: «Обратитесь к владельцу для настройки Resend». В `npm run dev`
+без ключа письмо эмулируется (кнопки на экране ожидания).
+
+CSP на Vercel (`vercel.json`): `img-src` — `'self' data: blob: https://*.supabase.co https://*.supabase.in`
+(внешние CDN для баннеров не пройдут — только Supabase Storage). `script-src 'self'` (prod-сборка Vite без
+inline-скриптов). `style-src` оставляет `'unsafe-inline'` — Tailwind/runtime
+иногда инжектит style-атрибуты.
+
+### Тесты
+
+```bash
+npm run test          # smoke data-layer + unit Login Guard / ads / requests
+npm run test:unit     # только unit-auth-notify.mjs
+npm run test:smoke    # только smoke-data-layer.mjs
+```
 
 ## 7. Если брать встроенный бэкенд Lovable (Cloud), а не свой проект
 
@@ -162,7 +254,7 @@ Lovable Cloud — это отдельный управляемый бэкенд 
 стороны**. Для этого репозитория вариант один: подключить именно свой
 Supabase-проект через коннектор — тогда код менять почти не нужно.
 
-## 7. Особенности Lovable при импорте этого репозитория
+## 8. Особенности Lovable при импорте этого репозитория
 
 - Проект на Vite + React + TS импортируется через GitHub-синк; обратно в GitHub
   синхронизируется **только дефолтная ветка** — изменения, сделанные в Arena,

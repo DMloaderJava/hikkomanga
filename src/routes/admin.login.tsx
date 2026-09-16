@@ -1,46 +1,148 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { auth } from '@/data/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Shield, KeyRound, AlertCircle } from 'lucide-react';
+import {
+  Shield,
+  KeyRound,
+  AlertCircle,
+  Mail,
+  Loader2,
+  CheckCircle2,
+  ExternalLink,
+} from 'lucide-react';
 import { updateMetaTags } from '@/lib/seo';
+import type { LoginNotifyResult } from '@/data/notify';
 
 export const Route = createFileRoute('/admin/login')({
   component: AdminLoginPage,
 });
+
+type Phase = 'form' | 'waiting' | 'denied' | 'expired' | 'service_error';
 
 function AdminLoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [phase, setPhase] = useState<Phase>('form');
+  const [notify, setNotify] = useState<LoginNotifyResult | null>(null);
+  const [pollHint, setPollHint] = useState('Ожидаем подтверждение…');
 
   const navigate = useNavigate();
 
+  const goAdminIfReady = useCallback(async () => {
+    const s = await auth.getSession();
+    if (!s) return false;
+    // hasRole уже требует approved challenge
+    const isAdmin = await auth.hasRole(s.user.id, 'admin');
+    if (isAdmin) {
+      navigate({ to: '/admin' });
+      return true;
+    }
+    return false;
+  }, [navigate]);
+
+  // Если уже подтверждён — сразу в админку. Если challenge pending — экран ожидания.
   useEffect(() => {
     updateMetaTags({ title: 'Вход в админ-панель' });
-    auth.getSession().then(async (s) => {
-      if (s) {
-        const isAdmin = await auth.hasRole(s.user.id, 'admin');
-        if (isAdmin) {
-          navigate({ to: '/admin' });
-        }
+    let cancelled = false;
+
+    (async () => {
+      const s = await auth.getSession();
+      if (!s || cancelled) return;
+
+      const ready = await goAdminIfReady();
+      if (ready || cancelled) return;
+
+      const status = await auth.getLoginChallengeStatus();
+      if (cancelled) return;
+      if (status === 'pending') {
+        setPhase('waiting');
+      } else if (status === 'denied') {
+        setPhase('denied');
+      } else if (status === 'expired') {
+        setPhase('expired');
+      } else if (status === 'error') {
+        setPhase('service_error');
+        setError(
+          'Сервис подтверждения входа временно недоступен. Попробуйте позже или обратитесь к владельцу.'
+        );
       }
-    });
-  }, [navigate]);
+      // status none/approved уже обработан выше; иначе остаёмся на форме
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [goAdminIfReady]);
+
+  // Polling статуса challenge, пока ждём письмо.
+  useEffect(() => {
+    if (phase !== 'waiting') return;
+
+    let stopped = false;
+    const tick = async () => {
+      const status = await auth.getLoginChallengeStatus();
+      if (stopped) return;
+      if (status === 'approved') {
+        setPollHint('Подтверждено! Открываем админку…');
+        await goAdminIfReady();
+        return;
+      }
+      if (status === 'denied') {
+        setPhase('denied');
+        await auth.signOut();
+        return;
+      }
+      if (status === 'expired') {
+        setPhase('expired');
+        await auth.signOut();
+        return;
+      }
+      if (status === 'error') {
+        setPollHint('Сервис статуса временно недоступен, повторяем…');
+        return;
+      }
+      setPollHint('Ожидаем подтверждение из письма…');
+    };
+
+    tick();
+    const id = window.setInterval(tick, 2500);
+    return () => {
+      stopped = true;
+      window.clearInterval(id);
+    };
+  }, [phase, goAdminIfReady]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setNotify(null);
     setLoading(true);
 
     try {
-      const { data, error: loginError } = await auth.signIn(email, password);
-      if (loginError) {
-        setError(loginError.message);
-      } else if (data.session) {
+      const result = await auth.signIn(email, password);
+      if (result.error) {
+        // Login Guard / Resend не настроен — подсказка для админа (не владельца).
+        const raw = result.error.message || '';
+        const isNotifyFail =
+          /письмо подтверждения|login-notify|RESEND|OWNER_NOTIFY|сервис подтверждения/i.test(
+            raw
+          );
+        setError(
+          isNotifyFail
+            ? `${raw}\n\nОбратитесь к владельцу сайта: нужно настроить Resend и Edge Function login-notify (OWNER_NOTIFY_EMAIL + RESEND_API_KEY в Supabase Secrets). Без письма подтверждения вход в админку закрыт.`
+            : raw
+        );
+        setPhase('form');
+      } else if (result.pendingConfirmation) {
+        setNotify(result.notify ?? null);
+        setPhase('waiting');
+      } else if (result.data.session) {
+        // На всякий случай: если когда-нибудь confirmation отключат.
         navigate({ to: '/admin' });
       }
     } catch (err: any) {
@@ -50,65 +152,176 @@ function AdminLoginPage() {
     }
   };
 
+  const handleCancelWait = async () => {
+    await auth.signOut();
+    setPhase('form');
+    setNotify(null);
+    setPassword('');
+    setError(null);
+  };
+
+  const handleRetry = async () => {
+    await auth.signOut();
+    setPhase('form');
+    setNotify(null);
+    setError(null);
+  };
+
   return (
     <div className="flex min-h-[calc(100vh-4rem)] items-center justify-center px-4 py-12">
       <div className="w-full max-w-md space-y-8 rounded-2xl border border-neutral-800 bg-neutral-900/80 p-8 shadow-2xl backdrop-blur-xl">
         <div className="text-center space-y-2">
           <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-600 text-white shadow-lg shadow-rose-600/30">
-            <Shield className="h-6 w-6" />
+            {phase === 'waiting' ? (
+              <Mail className="h-6 w-6" />
+            ) : phase === 'denied' ||
+              phase === 'expired' ||
+              phase === 'service_error' ? (
+              <AlertCircle className="h-6 w-6" />
+            ) : (
+              <Shield className="h-6 w-6" />
+            )}
           </div>
           <h1 className="text-2xl font-bold tracking-tight text-white">
-            Админ-панель
+            {phase === 'waiting'
+              ? 'Подтвердите вход'
+              : phase === 'denied'
+                ? 'Вход отклонён'
+                : phase === 'expired'
+                  ? 'Срок истёк'
+                  : phase === 'service_error'
+                    ? 'Сервис недоступен'
+                    : 'Админ-панель'}
           </h1>
           <p className="text-xs text-neutral-400">
-            Введите учетные данные администратора
+            {phase === 'waiting'
+              ? 'Письмо отправлено владельцу. Без подтверждения вход не откроется.'
+              : phase === 'denied'
+                ? 'Владелец отклонил этот вход. Сессия завершена.'
+                : phase === 'expired'
+                  ? 'Ссылка подтверждения истекла (15 минут). Войдите снова.'
+                  : phase === 'service_error'
+                    ? 'Не удалось проверить статус подтверждения. Попробуйте позже.'
+                    : 'Введите учетные данные администратора'}
           </p>
         </div>
 
         {error && (
-          <div className="flex items-center gap-2 rounded-xl border border-red-800/80 bg-red-950/40 p-3 text-xs text-red-400">
-            <AlertCircle className="h-4 w-4 shrink-0" />
-            <span>{error}</span>
+          <div className="flex items-start gap-2 rounded-xl border border-red-800/80 bg-red-950/40 p-3 text-xs text-red-400">
+            <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+            <span className="whitespace-pre-line leading-relaxed">{error}</span>
           </div>
         )}
 
-        <form onSubmit={handleLogin} className="space-y-4" autoComplete="on">
-          <div>
-            <Label htmlFor="email">Email</Label>
-            <Input
-              id="email"
-              name="email"
-              type="email"
-              inputMode="email"
-              autoComplete="username"
-              placeholder="admin@example.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              className="mt-1.5"
-            />
-          </div>
+        {phase === 'waiting' && (
+          <div className="space-y-4">
+            <div className="rounded-xl border border-amber-800/60 bg-amber-950/30 p-4 text-sm text-amber-100/90 space-y-2">
+              <div className="flex items-start gap-2">
+                <Loader2 className="h-4 w-4 shrink-0 mt-0.5 animate-spin text-amber-400" />
+                <div>
+                  <p className="font-medium text-amber-200">{pollHint}</p>
+                  <p className="text-xs text-amber-200/70 mt-1 leading-relaxed">
+                    Откройте почту владельца (OWNER_NOTIFY_EMAIL) и
+                    нажмите «Подтвердить — это я». Страница обновится автоматически.
+                  </p>
+                </div>
+              </div>
+            </div>
 
-          <div>
-            <Label htmlFor="password">Пароль</Label>
-            <Input
-              id="password"
-              name="password"
-              type="password"
-              autoComplete="current-password"
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              className="mt-1.5"
-            />
-          </div>
+            {notify?.emulated && notify.preview?.approveUrl && (
+              <div className="rounded-xl border border-neutral-700 bg-neutral-950/60 p-4 space-y-3">
+                <p className="text-xs text-neutral-400">
+                  Dev-режим без Resend: письмо эмулировано. Подтвердите вручную:
+                </p>
+                <div className="flex flex-col gap-2">
+                  <a
+                    href={notify.preview.approveUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-semibold px-3 py-2"
+                  >
+                    <CheckCircle2 className="h-4 w-4" />
+                    Подтвердить (dev)
+                    <ExternalLink className="h-3.5 w-3.5 opacity-70" />
+                  </a>
+                  {notify.preview.denyUrl && (
+                    <a
+                      href={notify.preview.denyUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-900/80 hover:bg-red-800 text-red-100 text-sm font-semibold px-3 py-2"
+                    >
+                      Отклонить (dev)
+                    </a>
+                  )}
+                </div>
+              </div>
+            )}
 
-          <Button type="submit" disabled={loading} className="w-full gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={handleCancelWait}
+              className="w-full border-neutral-700 text-neutral-300"
+            >
+              Отменить вход
+            </Button>
+          </div>
+        )}
+
+        {(phase === 'denied' ||
+          phase === 'expired' ||
+          phase === 'service_error') && (
+          <Button type="button" onClick={handleRetry} className="w-full gap-2">
             <KeyRound className="h-4 w-4" />
-            {loading ? 'Проверка...' : 'Войти'}
+            Войти заново
           </Button>
-        </form>
+        )}
+
+        {phase === 'form' && (
+          <form onSubmit={handleLogin} className="space-y-4" autoComplete="on">
+            <div>
+              <Label htmlFor="email">Email</Label>
+              <Input
+                id="email"
+                name="email"
+                type="email"
+                inputMode="email"
+                autoComplete="username"
+                placeholder="admin@example.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                className="mt-1.5"
+              />
+            </div>
+
+            <div>
+              <Label htmlFor="password">Пароль</Label>
+              <Input
+                id="password"
+                name="password"
+                type="password"
+                autoComplete="current-password"
+                placeholder="••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                className="mt-1.5"
+              />
+            </div>
+
+            <Button type="submit" disabled={loading} className="w-full gap-2">
+              <KeyRound className="h-4 w-4" />
+              {loading ? 'Отправка подтверждения…' : 'Войти'}
+            </Button>
+
+            <p className="text-[11px] text-neutral-500 text-center leading-relaxed">
+              После верного пароля на почту владельца уйдёт письмо. Пока его не
+              подтвердят — доступа к админке нет.
+            </p>
+          </form>
+        )}
       </div>
     </div>
   );

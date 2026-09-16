@@ -1,28 +1,55 @@
 import { useState } from 'react';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { titles as titlesApi } from '@/data/titles';
+import { auth } from '@/data/auth';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
+import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { Library, Plus, Search, Edit, Layers, Trash2, ExternalLink, AlertCircle } from 'lucide-react';
+import { RequestForm } from '@/components/admin/RequestForm';
+import {
+  Library,
+  Plus,
+  Search,
+  Edit,
+  Layers,
+  Send,
+  Trash2,
+  ExternalLink,
+  AlertCircle,
+} from 'lucide-react';
 import type { Title } from '@/data/types';
 
 export const Route = createFileRoute('/admin/titles/')({
   loader: async () => {
-    return { titles: await titlesApi.listAll() };
+    // isOwner резолвится в loader — без мерцания admin-UI → owner-UI.
+    let isOwner = false;
+    try {
+      const session = await auth.getSession();
+      const uid = session?.user?.id;
+      if (uid) isOwner = await auth.hasRole(uid, 'owner');
+    } catch {
+      // ignore
+    }
+    return { titles: await titlesApi.listAll(), isOwner };
   },
   component: AdminTitlesIndexPage,
 });
 
 function AdminTitlesIndexPage() {
-  const { titles } = Route.useLoaderData() as { titles: Title[] };
+  const { titles, isOwner } = Route.useLoaderData() as {
+    titles: Title[];
+    isOwner: boolean;
+  };
   const [search, setSearch] = useState('');
   const [titleList, setTitleList] = useState<Title[]>(titles);
+  const [requestDeleteTarget, setRequestDeleteTarget] = useState<Title | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Title | null>(null);
   const [pendingToggleId, setPendingToggleId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [dialogError, setDialogError] = useState<string | null>(null);
 
   const handleTogglePublish = async (id: string) => {
     setError(null);
@@ -30,24 +57,28 @@ function AdminTitlesIndexPage() {
     try {
       const updated = await titlesApi.togglePublish(id);
       setTitleList((prev) => prev.map((t) => (t.id === id ? updated : t)));
-    } catch (err: any) {
-      setError(err.message || 'Не удалось изменить статус публикации');
+    } catch (err: unknown) {
+      setError(
+        err instanceof Error ? err.message : 'Не удалось изменить статус публикации'
+      );
     } finally {
       setPendingToggleId(null);
     }
   };
 
-  const handleDelete = async () => {
+  const handleOwnerDelete = async () => {
     if (!deleteTarget) return;
     setError(null);
-    const id = deleteTarget.id;
+    setDialogError(null);
     try {
-      await titlesApi.delete(id);
-      setTitleList((prev) => prev.filter((t) => t.id !== id));
-    } catch (err: any) {
-      // закрываем диалог и показываем причину в баннере над таблицей
+      await titlesApi.delete(deleteTarget.id);
+      setTitleList((prev) => prev.filter((t) => t.id !== deleteTarget.id));
       setDeleteTarget(null);
-      setError(err.message || 'Не удалось удалить тайтл');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Не удалось удалить тайтл';
+      // Ошибка только в диалоге (модальный — верхний баннер не виден).
+      setDialogError(msg);
+      throw err; // ConfirmDialog остаётся открытым
     }
   };
 
@@ -66,6 +97,7 @@ function AdminTitlesIndexPage() {
           </h1>
           <p className="text-xs text-neutral-400 mt-1">
             Всего тайтлов: {titleList.length}
+            {isOwner ? ' · owner: прямое удаление' : ' · admin: удаление через заявку'}
           </p>
         </div>
 
@@ -85,7 +117,6 @@ function AdminTitlesIndexPage() {
         </div>
       )}
 
-      {/* Search Bar */}
       <div className="relative max-w-md">
         <Search className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-neutral-500" />
         <Input
@@ -97,7 +128,6 @@ function AdminTitlesIndexPage() {
         />
       </div>
 
-      {/* Table */}
       <div className="rounded-xl border border-neutral-800 bg-neutral-900/60 overflow-hidden shadow-xl">
         <table className="w-full text-left text-sm text-neutral-200">
           <thead className="bg-neutral-950/80 text-xs uppercase font-semibold text-neutral-400 border-b border-neutral-800">
@@ -124,12 +154,16 @@ function AdminTitlesIndexPage() {
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-3">
                     <div className="h-14 w-10 shrink-0 overflow-hidden rounded bg-neutral-950 border border-neutral-800">
-                      {t.cover_url && <img src={t.cover_url} alt={t.title} className="h-full w-full object-cover" />}
+                      {t.cover_url && (
+                        <img src={t.cover_url} alt={t.title} className="h-full w-full object-cover" />
+                      )}
                     </div>
                     <div>
                       <div className="font-bold text-white text-base">{t.title}</div>
                       <div className="text-xs text-neutral-500 font-mono">/{t.slug}</div>
-                      {t.author && <div className="text-xs text-neutral-400 font-medium">Автор: {t.author}</div>}
+                      {t.author && (
+                        <div className="text-xs text-neutral-400 font-medium">Автор: {t.author}</div>
+                      )}
                     </div>
                   </div>
                 </td>
@@ -137,7 +171,10 @@ function AdminTitlesIndexPage() {
                 <td className="px-6 py-4">
                   <div className="flex flex-wrap gap-1 max-w-xs">
                     {t.genres.map((g) => (
-                      <span key={g.id} className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-300">
+                      <span
+                        key={g.id}
+                        className="rounded bg-neutral-800 px-1.5 py-0.5 text-[10px] text-neutral-300"
+                      >
                         {g.name}
                       </span>
                     ))}
@@ -145,7 +182,10 @@ function AdminTitlesIndexPage() {
                 </td>
 
                 <td className="px-6 py-4">
-                  <Badge variant={t.status === 'completed' ? 'success' : 'default'} className="text-[10px]">
+                  <Badge
+                    variant={t.status === 'completed' ? 'success' : 'default'}
+                    className="text-[10px]"
+                  >
                     {t.status === 'completed' ? 'Завершён' : 'Онгоинг'}
                   </Badge>
                 </td>
@@ -158,7 +198,11 @@ function AdminTitlesIndexPage() {
                       onCheckedChange={() => handleTogglePublish(t.id)}
                     />
                     <span className="text-xs text-neutral-400">
-                      {pendingToggleId === t.id ? 'Сохранение...' : t.published ? 'Опубликован' : 'Черновик'}
+                      {pendingToggleId === t.id
+                        ? 'Сохранение...'
+                        : t.published
+                          ? 'Опубликован'
+                          : 'Черновик'}
                     </span>
                   </div>
                 </td>
@@ -167,33 +211,59 @@ function AdminTitlesIndexPage() {
                   <div className="flex items-center justify-end gap-1.5">
                     {t.published && (
                       <Link to="/title/$slug" params={{ slug: t.slug }} target="_blank">
-                        <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-neutral-400 hover:text-white" title="Посмотреть на сайте">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 w-8 p-0 text-neutral-400 hover:text-white"
+                          title="Посмотреть на сайте"
+                        >
                           <ExternalLink className="h-4 w-4" />
                         </Button>
                       </Link>
                     )}
 
                     <Link to="/admin/titles/$id/chapters" params={{ id: t.id }}>
-                      <Button variant="outline" size="sm" className="h-8 text-xs gap-1 border-neutral-800">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-8 text-xs gap-1 border-neutral-800"
+                      >
                         <Layers className="h-3.5 w-3.5" /> Глав
                       </Button>
                     </Link>
 
                     <Link to="/admin/titles/$id" params={{ id: t.id }}>
-                      <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-neutral-400 hover:text-white" title="Редактировать">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0 text-neutral-400 hover:text-white"
+                        title="Редактировать"
+                      >
                         <Edit className="h-4 w-4" />
                       </Button>
                     </Link>
 
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => setDeleteTarget(t)}
-                      className="h-8 w-8 p-0 text-neutral-400 hover:text-red-400 hover:bg-red-950/40"
-                      title="Удалить"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
+                    {isOwner ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setDeleteTarget(t)}
+                        className="h-8 w-8 p-0 text-neutral-400 hover:text-red-400 hover:bg-red-950/40"
+                        title="Удалить тайтл"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setRequestDeleteTarget(t)}
+                        className="h-8 w-8 p-0 text-neutral-400 hover:text-amber-400 hover:bg-amber-950/40"
+                        title="Запросить удаление"
+                      >
+                        <Send className="h-4 w-4" />
+                      </Button>
+                    )}
                   </div>
                 </td>
               </tr>
@@ -202,21 +272,47 @@ function AdminTitlesIndexPage() {
         </table>
       </div>
 
+      {/* Admin: заявка на удаление */}
+      <Dialog
+        open={!!requestDeleteTarget}
+        onOpenChange={(open) => {
+          if (!open) setRequestDeleteTarget(null);
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <RequestForm
+            type="delete_title"
+            target_id={requestDeleteTarget?.id}
+            target_name={requestDeleteTarget?.title}
+            title="Запрос на удаление тайтла"
+            description={`Удаление «${requestDeleteTarget?.title ?? ''}» со всеми главами и файлами потребует подтверждения владельца.`}
+            submitLabel="Запросить удаление"
+            onSuccess={() => setRequestDeleteTarget(null)}
+          />
+        </DialogContent>
+      </Dialog>
+
+      {/* Owner: прямое удаление */}
       <ConfirmDialog
         open={!!deleteTarget}
         onOpenChange={(open) => {
-          if (!open) setDeleteTarget(null);
+          if (!open) {
+            setDeleteTarget(null);
+            setDialogError(null);
+          }
         }}
-        title={`Удалить тайтл «${deleteTarget?.title ?? ''}»?`}
+        title="Удалить тайтл?"
         description={
           <>
-            Вместе с тайтлом будут безвозвратно удалены все его главы, страницы,
-            озвучки и загруженные файлы (обложка и изображения в хранилище).
-            Действие нельзя отменить.
+            «{deleteTarget?.title}» будет удалён вместе со всеми главами, страницами и
+            файлами. Действие необратимо.
+            {dialogError && (
+              <span className="mt-2 block text-red-400">{dialogError}</span>
+            )}
           </>
         }
-        confirmLabel="Удалить тайтл"
-        onConfirm={handleDelete}
+        confirmLabel="Удалить"
+        onConfirm={handleOwnerDelete}
       />
     </main>
   );

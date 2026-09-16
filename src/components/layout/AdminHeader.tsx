@@ -1,9 +1,44 @@
-import { Link } from '@tanstack/react-router';
-import { Library, Tag, ArrowLeft, LogOut } from 'lucide-react';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { Link, useRouterState } from '@tanstack/react-router';
+import { Library, Tag, ArrowLeft, LogOut, Inbox, Megaphone } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { auth } from '@/data/auth';
+import { adminRequests } from '@/data/adminRequests';
 
 export function AdminHeader() {
+  const [pendingCount, setPendingCount] = useState<number | null>(null);
+  const [isOwner, setIsOwner] = useState(false);
+  const ownerKnown = useRef(false);
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+
+  const refreshPending = useCallback(async () => {
+    try {
+      // hasRole(owner) — один раз за mount (не на каждый pathname).
+      if (!ownerKnown.current) {
+        const s = await auth.getSession();
+        const uid = s?.user?.id;
+        if (!uid) return;
+        const owner = await auth.hasRole(uid, 'owner');
+        setIsOwner(owner);
+        ownerKnown.current = true;
+        if (!owner) {
+          setPendingCount(null);
+          return;
+        }
+      } else if (!isOwner) {
+        return;
+      }
+      const list = await adminRequests.listPending();
+      setPendingCount(list.length);
+    } catch {
+      // header не должен ломаться
+    }
+  }, [isOwner]);
+
+  useEffect(() => {
+    void refreshPending();
+  }, [pathname, refreshPending]);
+
   const handleLogout = async () => {
     await auth.signOut();
     window.location.href = '/admin/login';
@@ -13,7 +48,10 @@ export function AdminHeader() {
     <header className="sticky top-0 z-40 border-b border-neutral-800 bg-neutral-900/90 backdrop-blur-md">
       <div className="mx-auto flex h-16 max-w-7xl items-center justify-between px-4 sm:px-6 lg:px-8">
         <div className="flex items-center gap-6">
-          <Link to="/" className="flex items-center gap-2 group text-neutral-400 hover:text-white text-xs font-medium border-r border-neutral-800 pr-4">
+          <Link
+            to="/"
+            className="flex items-center gap-2 group text-neutral-400 hover:text-white text-xs font-medium border-r border-neutral-800 pr-4"
+          >
             <ArrowLeft className="h-4 w-4" />
             <span className="hidden sm:inline">На сайт</span>
           </Link>
@@ -28,7 +66,10 @@ export function AdminHeader() {
             <Link
               to="/admin/titles"
               className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-neutral-400 hover:bg-neutral-800 hover:text-white transition-colors"
-              activeProps={{ className: 'bg-rose-950/50 text-rose-400 font-medium border border-rose-900/50' }}
+              activeProps={{
+                className:
+                  'bg-rose-950/50 text-rose-400 font-medium border border-rose-900/50',
+              }}
             >
               <Library className="h-4 w-4" />
               Тайтлы
@@ -36,11 +77,43 @@ export function AdminHeader() {
             <Link
               to="/admin/genres"
               className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-neutral-400 hover:bg-neutral-800 hover:text-white transition-colors"
-              activeProps={{ className: 'bg-rose-950/50 text-rose-400 font-medium border border-rose-900/50' }}
+              activeProps={{
+                className:
+                  'bg-rose-950/50 text-rose-400 font-medium border border-rose-900/50',
+              }}
             >
               <Tag className="h-4 w-4" />
               Жанры
             </Link>
+            <Link
+              to="/admin/requests"
+              className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-neutral-400 hover:bg-neutral-800 hover:text-white transition-colors relative"
+              activeProps={{
+                className:
+                  'bg-rose-950/50 text-rose-400 font-medium border border-rose-900/50',
+              }}
+            >
+              <Inbox className="h-4 w-4" />
+              Заявки
+              {pendingCount != null && pendingCount > 0 && (
+                <span className="ml-0.5 inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-rose-600 px-1.5 text-[10px] font-bold text-white">
+                  {pendingCount > 99 ? '99+' : pendingCount}
+                </span>
+              )}
+            </Link>
+            {isOwner && (
+              <Link
+                to="/admin/ads"
+                className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-neutral-400 hover:bg-neutral-800 hover:text-white transition-colors"
+                activeProps={{
+                  className:
+                    'bg-rose-950/50 text-rose-400 font-medium border border-rose-900/50',
+                }}
+              >
+                <Megaphone className="h-4 w-4" />
+                Реклама
+              </Link>
+            )}
           </nav>
         </div>
 

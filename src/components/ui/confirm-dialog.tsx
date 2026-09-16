@@ -35,7 +35,13 @@ export function ConfirmDialog({
     setPending(true);
     try {
       await onConfirm();
+      // Успех → закрываем. Ошибку родитель показывает в inline-баннере;
+      // диалог оставляем открытым, чтобы можно было повторить / отменить.
       onOpenChange(false);
+    } catch (e) {
+      // onConfirm по контракту сам сообщает об ошибке пользователю;
+      // здесь ловим, чтобы не было unhandled rejection. Диалог НЕ закрываем.
+      console.warn('[confirm-dialog] действие завершилось ошибкой:', e);
     } finally {
       setPending(false);
     }

@@ -1,7 +1,10 @@
 /**
- * Шаблон письма-уведомления о входе админа.
- * Чистый модуль без зависимостей: его импортируют и Vite (dev-транспорт
- * /api/login-notify), и Supabase Edge Function supabase/functions/login-notify.
+ * Шаблон письма-подтверждения входа админа (Login Guard / 2FA-light).
+ * Чистый модуль без зависимостей: лежит в supabase/functions/_shared/,
+ * чтобы попадать в бандл Edge Function. Его же импортирует Vite
+ * (dev-транспорт /api/login-notify).
+ *
+ * Без перехода по ссылке «Подтвердить» вход в админку не открывается.
  */
 
 export interface LoginMailPayload {
@@ -10,10 +13,12 @@ export interface LoginMailPayload {
   userAgent?: string;
   siteUrl?: string;
   ip?: string;
+  /** Секретный токен challenge — без него ссылки подтверждения не собрать. */
+  confirmToken?: string;
 }
 
 export function buildLoginMailSubject(p: LoginMailPayload): string {
-  return `Вход админа в Hikkomanga: ${p.adminEmail || 'неизвестный аккаунт'}`;
+  return `Подтвердите вход в Hikkomanga: ${p.adminEmail || 'неизвестный аккаунт'}`;
 }
 
 function escapeHtml(s: string): string {
@@ -42,10 +47,16 @@ function shortAgent(ua?: string): string {
   return clean;
 }
 
+function confirmHref(siteUrl: string | undefined, token: string | undefined, action: 'approve' | 'deny'): string {
+  const site = (siteUrl || '').replace(/\/$/, '');
+  if (!site || !token) return '#';
+  const q = new URLSearchParams({ token, action });
+  return `${site}/admin/login/confirm?${q.toString()}`;
+}
+
 export function buildLoginMailHtml(p: LoginMailPayload): string {
-  const site = (p.siteUrl || '').replace(/\/$/, '');
-  const ackHref = site ? `${site}/admin` : '#';
-  const denyHref = site ? `${site}/admin/login` : '#';
+  const ackHref = confirmHref(p.siteUrl, p.confirmToken, 'approve');
+  const denyHref = confirmHref(p.siteUrl, p.confirmToken, 'deny');
 
   return `
 <!doctype html>
@@ -61,11 +72,12 @@ export function buildLoginMailHtml(p: LoginMailPayload): string {
               Hikkomanga · Login Guard
             </div>
             <h1 style="margin:10px 0 4px;font-size:20px;color:#fafafa;">
-              Выполнен вход в админ-панель
+              Подтвердите вход в админ-панель
             </h1>
             <p style="margin:0;font-size:14px;line-height:1.6;color:#a3a3a3;">
-              Кто-то вошёл как администратор через кнопку «Войти».
-              Если это были вы — просто подтвердите вход. Если нет — действуйте немедленно.
+              Кто-то ввёл пароль администратора. <strong style="color:#e5e5e5;">Без вашего
+              подтверждения вход не откроется.</strong> Если это были вы — нажмите «Подтвердить».
+              Если нет — нажмите «Это не я» и смените пароль.
             </p>
           </td>
         </tr>
@@ -107,10 +119,9 @@ export function buildLoginMailHtml(p: LoginMailPayload): string {
         <tr>
           <td style="padding:8px 28px 24px;">
             <p style="margin:0;font-size:12px;line-height:1.6;color:#737373;">
-              Если вход совершили не вы: немедленно смените пароль администратора
-              (Supabase → Authentication → Users), завершите активные сессии
-              и проверьте журнал входов. Письмо отправлено автоматически
-              и не требует ответа.
+              Ссылка действует 15 минут. Если вход совершили не вы: нажмите «Это не я»,
+              затем смените пароль администратора (Supabase → Authentication → Users)
+              и завершите активные сессии. Письмо отправлено автоматически.
             </p>
           </td>
         </tr>
