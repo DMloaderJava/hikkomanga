@@ -1,15 +1,98 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
-import { buildLoginMailHtml, buildLoginMailSubject } from './src/lib/loginMailTemplate.ts';
+import {
+  buildLoginMailHtml,
+  buildLoginMailSubject,
+} from './supabase/functions/_shared/loginMailTemplate.ts';
+import { generateLoginChallengeToken } from './supabase/functions/_shared/loginChallengeToken.ts';
 import path from 'path';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/** Dev-хранилище challenge'ей (без Supabase). Файл в .gitignore-зоне .local. */
+const DEV_CHALLENGES_PATH = path.resolve(__dirname, '.local/login-challenges.json');
+
+type DevChallenge = {
+  id: string;
+  token: string;
+  status: 'pending' | 'approved' | 'denied' | 'expired';
+  adminEmail?: string;
+  createdAt: string;
+  expiresAt: string;
+  resolvedAt?: string;
+};
+
+function readDevChallenges(): DevChallenge[] {
+  try {
+    if (!fs.existsSync(DEV_CHALLENGES_PATH)) return [];
+    return JSON.parse(fs.readFileSync(DEV_CHALLENGES_PATH, 'utf8')) as DevChallenge[];
+  } catch {
+    return [];
+  }
+}
+
+function writeDevChallenges(list: DevChallenge[]) {
+  fs.mkdirSync(path.dirname(DEV_CHALLENGES_PATH), { recursive: true });
+  fs.writeFileSync(DEV_CHALLENGES_PATH, JSON.stringify(list, null, 2));
+}
+
+function resolveDevChallenge(
+  token: string,
+  action: 'approve' | 'deny'
+): { ok: boolean; status: string } {
+  const list = readDevChallenges();
+  const idx = list.findIndex((c) => c.token === token);
+  if (idx < 0) return { ok: false, status: 'not_found' };
+  const ch = list[idx];
+  if (ch.status === 'approved') return { ok: true, status: 'already_approved' };
+  if (ch.status === 'denied') return { ok: true, status: 'already_denied' };
+  if (ch.status === 'expired' || new Date(ch.expiresAt).getTime() < Date.now()) {
+    if (ch.status === 'pending') {
+      ch.status = 'expired';
+      ch.resolvedAt = new Date().toISOString();
+      list[idx] = ch;
+      writeDevChallenges(list);
+    }
+    return { ok: false, status: 'expired' };
+  }
+  ch.status = action === 'approve' ? 'approved' : 'denied';
+  ch.resolvedAt = new Date().toISOString();
+  list[idx] = ch;
+  writeDevChallenges(list);
+  return { ok: true, status: ch.status };
+}
+
 export default defineConfig(({ mode }) => {
+  // Третий аргумент '' обязателен: без него loadEnv вернёт только VITE_*,
+  // а GEMINI_API_KEY / RESEND_API_KEY / OWNER_NOTIFY_EMAIL — серверные секреты.
   const env = loadEnv(mode, process.cwd(), '');
   const geminiApiKey = env.GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+  // Адрес владельца для Login Guard.
+  // Fail-fast: без OWNER_NOTIFY_EMAIL (и без placeholder) — не шлём в void.
+  // Placeholder owner@example.com / *@example.com запрещены (тихий bounce).
+  const rawOwnerEmail = (
+    env.OWNER_NOTIFY_EMAIL ||
+    process.env.OWNER_NOTIFY_EMAIL ||
+    ''
+  ).trim();
+  const ownerNotifyEmail = (() => {
+    if (!rawOwnerEmail) {
+      console.warn(
+        '[login-notify] OWNER_NOTIFY_EMAIL не задан — dev-мидлварь эмулирует, но письмо никуда не уйдёт. Задайте в .env'
+      );
+      return '';
+    }
+    if (/@example\.(com|org|net)$/i.test(rawOwnerEmail) || rawOwnerEmail === 'owner@example.com') {
+      console.warn(
+        `[login-notify] OWNER_NOTIFY_EMAIL=${rawOwnerEmail} — placeholder. Задайте реальный адрес владельца в .env`
+      );
+      return '';
+    }
+    return rawOwnerEmail;
+  })();
 
   return {
     plugins: [
@@ -130,12 +213,10 @@ export default defineConfig(({ mode }) => {
         },
       },
       {
-        name: 'login-notify-middleware',
+        name: 'login-guard-middleware',
         configureServer(server) {
           server.middlewares.use(async (req, res, next) => {
-            if (!req.url?.startsWith('/api/login-notify') || req.method !== 'POST') {
-              return next();
-            }
+            const url = req.url?.split('?')[0] || '';
 
             const send = (code: number, obj: unknown) => {
               res.statusCode = code;
@@ -143,31 +224,122 @@ export default defineConfig(({ mode }) => {
               res.end(JSON.stringify(obj));
             };
 
+            // GET /api/login-challenge-status?id=... — polling в dev без Supabase
+            if (url === '/api/login-challenge-status' && req.method === 'GET') {
+              try {
+                const u = new URL(req.url || '', 'http://localhost');
+                const id = u.searchParams.get('id') || '';
+                const list = readDevChallenges();
+                let ch = id
+                  ? list.find((c) => c.id === id)
+                  : list.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+                if (!ch) {
+                  send(200, { status: 'none' });
+                  return;
+                }
+                if (ch.status === 'pending' && new Date(ch.expiresAt).getTime() < Date.now()) {
+                  ch = { ...ch, status: 'expired', resolvedAt: new Date().toISOString() };
+                  writeDevChallenges(list.map((c) => (c.id === ch!.id ? ch! : c)));
+                }
+                send(200, { status: ch.status, id: ch.id, expiresAt: ch.expiresAt });
+              } catch (err: any) {
+                send(500, { status: 'error', error: err.message });
+              }
+              return;
+            }
+
+            // POST /api/login-confirm — approve/deny по токену (dev, без Supabase)
+            if (url === '/api/login-confirm' && req.method === 'POST') {
+              let bodyStr = '';
+              req.on('data', (chunk) => (bodyStr += chunk));
+              req.on('end', () => {
+                try {
+                  const body = JSON.parse(bodyStr || '{}') as {
+                    token?: string;
+                    action?: string;
+                  };
+                  const token = (body.token || '').trim();
+                  const action = (body.action || '').trim().toLowerCase();
+                  if (!token || (action !== 'approve' && action !== 'deny')) {
+                    send(400, {
+                      ok: false,
+                      status: 'invalid_action',
+                      error: 'token and action=approve|deny required',
+                    });
+                    return;
+                  }
+                  const result = resolveDevChallenge(
+                    token,
+                    action as 'approve' | 'deny'
+                  );
+                  send(result.ok ? 200 : 400, result);
+                } catch (err: any) {
+                  send(500, { ok: false, status: 'error', error: err.message });
+                }
+              });
+              return;
+            }
+
+            // POST /api/login-notify — создать challenge + письмо
+            if (url !== '/api/login-notify' || req.method !== 'POST') {
+              return next();
+            }
+
             let bodyStr = '';
             req.on('data', (chunk) => (bodyStr += chunk));
             req.on('end', async () => {
               try {
                 const payload = JSON.parse(bodyStr || '{}');
-                const to = env.OWNER_NOTIFY_EMAIL || process.env.OWNER_NOTIFY_EMAIL;
+                // Без реального email — эмуляция с пометкой; prod edge fn fail-fast 500.
+                const to = ownerNotifyEmail || 'UNSET_OWNER_NOTIFY_EMAIL';
                 const apiKey = env.RESEND_API_KEY || process.env.RESEND_API_KEY;
                 const from =
                   env.OWNER_NOTIFY_FROM ||
                   process.env.OWNER_NOTIFY_FROM ||
                   'Hikkomanga Login Guard <onboarding@resend.dev>';
 
-                if (!to) {
-                  send(500, { ok: false, error: 'OWNER_NOTIFY_EMAIL не задан в .env' });
-                  return;
-                }
+                const confirmToken = generateLoginChallengeToken();
+                const now = Date.now();
+                const challenge: DevChallenge = {
+                  id: `ch-${now}`,
+                  token: confirmToken,
+                  status: 'pending',
+                  adminEmail: payload.adminEmail,
+                  createdAt: new Date(now).toISOString(),
+                  expiresAt: new Date(now + 15 * 60 * 1000).toISOString(),
+                };
+                // Гасим предыдущие pending
+                const prev = readDevChallenges().map((c) =>
+                  c.status === 'pending'
+                    ? { ...c, status: 'expired' as const, resolvedAt: new Date().toISOString() }
+                    : c
+                );
+                writeDevChallenges([...prev, challenge]);
 
-                const subject = buildLoginMailSubject(payload);
-                const html = buildLoginMailHtml(payload);
+                const mailPayload = { ...payload, confirmToken };
+                const subject = buildLoginMailSubject(mailPayload);
+                const html = buildLoginMailHtml(mailPayload);
+                const site = String(payload.siteUrl || '').replace(/\/$/, '');
+                const approveUrl = site
+                  ? `${site}/admin/login/confirm?token=${encodeURIComponent(confirmToken)}&action=approve`
+                  : undefined;
+                const denyUrl = site
+                  ? `${site}/admin/login/confirm?token=${encodeURIComponent(confirmToken)}&action=deny`
+                  : undefined;
 
-                // Без ключа Resend письмо некуда слать — эмулируем:
-                // печатаем в консоль dev-сервера и отдаём preview клиенту.
+                // Без ключа Resend — эмуляция: консоль + preview со ссылками.
                 if (!apiKey) {
-                  console.log(`\n[login-notify] ЭМУЛЯЦИЯ письма → ${to}\n${subject}\n`);
-                  send(200, { ok: true, emulated: true, preview: { to, from, subject, html } });
+                  console.log(
+                    `\n[login-notify] ЭМУЛЯЦИЯ письма → ${to}\n${subject}\n` +
+                      `  approve: ${approveUrl}\n  deny:    ${denyUrl}\n` +
+                      `  token:   ${confirmToken}\n`
+                  );
+                  send(200, {
+                    ok: true,
+                    emulated: true,
+                    challengeId: challenge.id,
+                    preview: { to, from, subject, html, approveUrl, denyUrl },
+                  });
                   return;
                 }
 
@@ -187,7 +359,11 @@ export default defineConfig(({ mode }) => {
                   });
                   return;
                 }
-                send(200, { ok: true, id: (data as any)?.id });
+                send(200, {
+                  ok: true,
+                  challengeId: challenge.id,
+                  id: (data as any)?.id,
+                });
               } catch (err: any) {
                 send(500, { ok: false, error: err.message });
               }

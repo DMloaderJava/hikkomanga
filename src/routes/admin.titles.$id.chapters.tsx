@@ -3,12 +3,22 @@ import { createFileRoute, Link } from '@tanstack/react-router';
 import { titles as titlesApi } from '@/data/titles';
 import { chapters as chaptersApi } from '@/data/chapters';
 import { ChapterForm } from '@/components/admin/ChapterForm';
+import { RequestForm } from '@/components/admin/RequestForm';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { ConfirmDialog } from '@/components/ui/confirm-dialog';
-import { ArrowLeft, Layers, Plus, Trash2, BookOpen, FileImage, AlertCircle } from 'lucide-react';
+import { Dialog, DialogContent } from '@/components/ui/dialog';
+import {
+  ArrowLeft,
+  Layers,
+  Plus,
+  Send,
+  BookOpen,
+  FileImage,
+  AlertCircle,
+} from 'lucide-react';
 import type { Title, Chapter, ChapterInput } from '@/data/types';
 import { formatChapterNumber, formatDate } from '@/lib/format';
+import { auth } from '@/data/auth';
 
 export const Route = createFileRoute('/admin/titles/$id/chapters')({
   loader: async ({ params }) => {
@@ -17,17 +27,30 @@ export const Route = createFileRoute('/admin/titles/$id/chapters')({
       chaptersApi.listByTitle(params.id, true),
     ]);
     if (!titleData) throw new Error('Тайтл не найден');
-    return { title: titleData, chapters: chapterList };
+    // isOwner в loader — без мерцания UI admin ↔ owner.
+    let isOwner = false;
+    try {
+      const session = await auth.getSession();
+      const uid = session?.user?.id;
+      if (uid) isOwner = await auth.hasRole(uid, 'owner');
+    } catch {
+      // ignore
+    }
+    return { title: titleData, chapters: chapterList, isOwner };
   },
   component: AdminTitleChaptersPage,
 });
 
 function AdminTitleChaptersPage() {
-  const { title, chapters } = Route.useLoaderData() as { title: Title; chapters: Chapter[] };
+  const { title, chapters, isOwner } = Route.useLoaderData() as {
+    title: Title;
+    chapters: Chapter[];
+    isOwner: boolean;
+  };
   const [chapterList, setChapterList] = useState<Chapter[]>(chapters);
   const [showAddForm, setShowAddForm] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<Chapter | null>(null);
+  const [requestDeleteTarget, setRequestDeleteTarget] = useState<Chapter | null>(null);
   const [pendingToggleId, setPendingToggleId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,39 +59,34 @@ function AdminTitleChaptersPage() {
     setError(null);
     try {
       const created = await chaptersApi.create(input);
-      setChapterList((prev) => [...prev, created].sort((a, b) => a.number - b.number));
+      setChapterList((prev) =>
+        [...prev, created].sort((a, b) => a.number - b.number)
+      );
       setShowAddForm(false);
     } catch (err) {
-      // ошибку покажет сама форма главы (у неё свой inline-баннер)
       throw err;
     } finally {
       setIsSubmitting(false);
     }
   };
 
-  const handleTogglePublish = async (chapterId: string, currentPublished: boolean) => {
+  const handleTogglePublish = async (
+    chapterId: string,
+    currentPublished: boolean
+  ) => {
     setError(null);
     setPendingToggleId(chapterId);
     try {
-      const updated = await chaptersApi.update(chapterId, { published: !currentPublished });
-      setChapterList((prev) => prev.map((c) => (c.id === chapterId ? updated : c)));
+      const updated = await chaptersApi.update(chapterId, {
+        published: !currentPublished,
+      });
+      setChapterList((prev) =>
+        prev.map((c) => (c.id === chapterId ? updated : c))
+      );
     } catch (err: any) {
       setError(err.message || 'Не удалось изменить статус главы');
     } finally {
       setPendingToggleId(null);
-    }
-  };
-
-  const handleDeleteChapter = async () => {
-    if (!deleteTarget) return;
-    setError(null);
-    const chapterId = deleteTarget.id;
-    try {
-      await chaptersApi.delete(chapterId);
-      setChapterList((prev) => prev.filter((c) => c.id !== chapterId));
-    } catch (err: any) {
-      setDeleteTarget(null);
-      setError(err.message || 'Не удалось удалить главу');
     }
   };
 
@@ -109,18 +127,31 @@ function AdminTitleChaptersPage() {
         </div>
       )}
 
-      {showAddForm && (
-        <div className="space-y-2">
-          <h3 className="text-sm font-semibold text-neutral-300">Новая глава</h3>
-          <ChapterForm
-            titleId={title.id}
-            onSubmit={handleCreateChapter}
-            isSubmitting={isSubmitting}
-          />
-        </div>
-      )}
+      {showAddForm &&
+        (isOwner ? (
+          <div className="space-y-2">
+            <h3 className="text-sm font-semibold text-neutral-300">Новая глава</h3>
+            <ChapterForm
+              titleId={title.id}
+              onSubmit={handleCreateChapter}
+              isSubmitting={isSubmitting}
+            />
+          </div>
+        ) : (
+          <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-4">
+            <RequestForm
+              type="new_chapter"
+              target_id={title.id}
+              target_name={title.title}
+              payload={{ suggested_number: chapterList.length + 1 }}
+              title="Запрос на добавление главы"
+              description="Владелец создаст главу и вы сможете загрузить страницы."
+              submitLabel="Запросить создание главы"
+              onSuccess={() => setShowAddForm(false)}
+            />
+          </div>
+        ))}
 
-      {/* Chapters Table */}
       <div className="rounded-xl border border-neutral-800 bg-neutral-900/60 overflow-hidden shadow-xl">
         {chapterList.length === 0 ? (
           <div className="p-12 text-center text-sm text-neutral-500">
@@ -164,10 +195,16 @@ function AdminTitleChaptersPage() {
                       <Switch
                         checked={ch.published}
                         disabled={pendingToggleId === ch.id}
-                        onCheckedChange={() => handleTogglePublish(ch.id, ch.published)}
+                        onCheckedChange={() =>
+                          handleTogglePublish(ch.id, ch.published)
+                        }
                       />
                       <span className="text-xs text-neutral-400">
-                        {pendingToggleId === ch.id ? 'Сохранение...' : ch.published ? 'Опубликована' : 'Черновик'}
+                        {pendingToggleId === ch.id
+                          ? 'Сохранение...'
+                          : ch.published
+                            ? 'Опубликована'
+                            : 'Черновик'}
                       </span>
                     </div>
                   </td>
@@ -178,19 +215,24 @@ function AdminTitleChaptersPage() {
                         to="/admin/titles/$id/chapters/$cid"
                         params={{ id: title.id, cid: ch.id }}
                       >
-                        <Button size="sm" variant="outline" className="h-8 text-xs gap-1.5 border-neutral-800">
-                          <FileImage className="h-3.5 w-3.5 text-rose-400" /> Страницы и загрузка
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-8 text-xs gap-1.5 border-neutral-800"
+                        >
+                          <FileImage className="h-3.5 w-3.5 text-rose-400" />{' '}
+                          Страницы и загрузка
                         </Button>
                       </Link>
 
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => setDeleteTarget(ch)}
-                        className="h-8 w-8 p-0 text-neutral-400 hover:text-red-400 hover:bg-red-950/40"
-                        title="Удалить главу"
+                        onClick={() => setRequestDeleteTarget(ch)}
+                        className="h-8 w-8 p-0 text-neutral-400 hover:text-amber-400 hover:bg-amber-950/40"
+                        title="Запросить удаление"
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <Send className="h-4 w-4" />
                       </Button>
                     </div>
                   </td>
@@ -201,21 +243,28 @@ function AdminTitleChaptersPage() {
         )}
       </div>
 
-      <ConfirmDialog
-        open={!!deleteTarget}
+      <Dialog
+        open={!!requestDeleteTarget}
         onOpenChange={(open) => {
-          if (!open) setDeleteTarget(null);
+          if (!open) setRequestDeleteTarget(null);
         }}
-        title={`Удалить главу ${deleteTarget ? formatChapterNumber(deleteTarget.number) : ''}?`}
-        description={
-          <>
-            Будут удалены все страницы главы, их файлы в хранилище и озвучка.
-            Действие нельзя отменить.
-          </>
-        }
-        confirmLabel="Удалить главу"
-        onConfirm={handleDeleteChapter}
-      />
+      >
+        <DialogContent className="max-w-md">
+          <RequestForm
+            type="delete_chapter"
+            target_id={requestDeleteTarget?.id}
+            target_name={
+              requestDeleteTarget
+                ? `Глава ${formatChapterNumber(requestDeleteTarget.number)}`
+                : ''
+            }
+            title="Запрос на удаление главы"
+            description="Удаление главы со страницами и озвучкой потребует подтверждения владельца."
+            submitLabel="Запросить удаление"
+            onSuccess={() => setRequestDeleteTarget(null)}
+          />
+        </DialogContent>
+      </Dialog>
     </main>
   );
 }

@@ -3,7 +3,7 @@ import { DuplicateChapterError } from './types';
 import { generatePlaceholderCover } from '@/lib/placeholder-cover';
 
 /** Локальные демо-медиа лежат в public/media (см. public/media/ATTRIBUTION.md). */
-const asset = (path: string) => `${import.meta.env.BASE_URL}${path}`;
+const asset = (path: string) => `${import.meta.env?.BASE_URL ?? '/'}${path}`;
 
 /** При смене версии сидов старый localStorage сбрасывается, иначе новые
  *  обложки/страницы никогда не доедут до браузера пользователя. */

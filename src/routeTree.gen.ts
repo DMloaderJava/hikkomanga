@@ -11,11 +11,15 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AdminRouteImport } from './routes/admin'
+import { Route as AdvertiseRouteImport } from './routes/advertise'
 import { Route as AdminIndexRouteImport } from './routes/admin.index'
+import { Route as AdminAdsRouteImport } from './routes/admin.ads'
 import { Route as AdminGenresRouteImport } from './routes/admin.genres'
 import { Route as AdminLoginRouteImport } from './routes/admin.login'
+import { Route as AdminRequestsRouteImport } from './routes/admin.requests'
 import { Route as AdminTitlesRouteImport } from './routes/admin.titles'
 import { Route as TitleSlugRouteImport } from './routes/title.$slug'
+import { Route as AdminLoginConfirmRouteImport } from './routes/admin.login.confirm'
 import { Route as AdminTitlesIndexRouteImport } from './routes/admin.titles.index'
 import { Route as AdminTitlesIdRouteImport } from './routes/admin.titles.$id'
 import { Route as AdminTitlesNewRouteImport } from './routes/admin.titles.new'
@@ -34,9 +38,19 @@ const AdminRoute = AdminRouteImport.update({
   path: '/admin',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdvertiseRoute = AdvertiseRouteImport.update({
+  id: '/advertise',
+  path: '/advertise',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AdminIndexRoute = AdminIndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminAdsRoute = AdminAdsRouteImport.update({
+  id: '/ads',
+  path: '/ads',
   getParentRoute: () => AdminRoute,
 } as any)
 const AdminGenresRoute = AdminGenresRouteImport.update({
@@ -49,6 +63,11 @@ const AdminLoginRoute = AdminLoginRouteImport.update({
   path: '/login',
   getParentRoute: () => AdminRoute,
 } as any)
+const AdminRequestsRoute = AdminRequestsRouteImport.update({
+  id: '/requests',
+  path: '/requests',
+  getParentRoute: () => AdminRoute,
+} as any)
 const AdminTitlesRoute = AdminTitlesRouteImport.update({
   id: '/titles',
   path: '/titles',
@@ -58,6 +77,11 @@ const TitleSlugRoute = TitleSlugRouteImport.update({
   id: '/title/$slug',
   path: '/title/$slug',
   getParentRoute: () => rootRouteImport,
+} as any)
+const AdminLoginConfirmRoute = AdminLoginConfirmRouteImport.update({
+  id: '/confirm',
+  path: '/confirm',
+  getParentRoute: () => AdminLoginRoute,
 } as any)
 const AdminTitlesIndexRoute = AdminTitlesIndexRouteImport.update({
   id: '/',
@@ -99,11 +123,15 @@ const AdminTitlesIdChaptersCidRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
+  '/advertise': typeof AdvertiseRoute
+  '/admin/ads': typeof AdminAdsRoute
   '/admin/genres': typeof AdminGenresRoute
-  '/admin/login': typeof AdminLoginRoute
+  '/admin/login': typeof AdminLoginRouteWithChildren
+  '/admin/requests': typeof AdminRequestsRoute
   '/admin/titles': typeof AdminTitlesRouteWithChildren
   '/title/$slug': typeof TitleSlugRouteWithChildren
   '/admin/': typeof AdminIndexRoute
+  '/admin/login/confirm': typeof AdminLoginConfirmRoute
   '/admin/titles/$id': typeof AdminTitlesIdRouteWithChildren
   '/admin/titles/new': typeof AdminTitlesNewRoute
   '/admin/titles/': typeof AdminTitlesIndexRoute
@@ -114,10 +142,14 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/advertise': typeof AdvertiseRoute
+  '/admin/ads': typeof AdminAdsRoute
   '/admin/genres': typeof AdminGenresRoute
-  '/admin/login': typeof AdminLoginRoute
+  '/admin/login': typeof AdminLoginRouteWithChildren
+  '/admin/requests': typeof AdminRequestsRoute
   '/title/$slug': typeof TitleSlugRouteWithChildren
   '/admin': typeof AdminIndexRoute
+  '/admin/login/confirm': typeof AdminLoginConfirmRoute
   '/admin/titles/new': typeof AdminTitlesNewRoute
   '/admin/titles': typeof AdminTitlesIndexRoute
   '/admin/titles/$id/chapters': typeof AdminTitlesIdChaptersRouteWithChildren
@@ -129,11 +161,15 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/admin': typeof AdminRouteWithChildren
+  '/advertise': typeof AdvertiseRoute
+  '/admin/ads': typeof AdminAdsRoute
   '/admin/genres': typeof AdminGenresRoute
-  '/admin/login': typeof AdminLoginRoute
+  '/admin/login': typeof AdminLoginRouteWithChildren
+  '/admin/requests': typeof AdminRequestsRoute
   '/admin/titles': typeof AdminTitlesRouteWithChildren
   '/title/$slug': typeof TitleSlugRouteWithChildren
   '/admin/': typeof AdminIndexRoute
+  '/admin/login/confirm': typeof AdminLoginConfirmRoute
   '/admin/titles/$id': typeof AdminTitlesIdRouteWithChildren
   '/admin/titles/new': typeof AdminTitlesNewRoute
   '/admin/titles/': typeof AdminTitlesIndexRoute
@@ -147,11 +183,15 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/admin'
+    | '/advertise'
+    | '/admin/ads'
     | '/admin/genres'
     | '/admin/login'
+    | '/admin/requests'
     | '/admin/titles'
     | '/title/$slug'
     | '/admin/'
+    | '/admin/login/confirm'
     | '/admin/titles/$id'
     | '/admin/titles/new'
     | '/admin/titles/'
@@ -162,10 +202,14 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/advertise'
+    | '/admin/ads'
     | '/admin/genres'
     | '/admin/login'
+    | '/admin/requests'
     | '/title/$slug'
     | '/admin'
+    | '/admin/login/confirm'
     | '/admin/titles/new'
     | '/admin/titles'
     | '/admin/titles/$id/chapters'
@@ -176,11 +220,15 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/admin'
+    | '/advertise'
+    | '/admin/ads'
     | '/admin/genres'
     | '/admin/login'
+    | '/admin/requests'
     | '/admin/titles'
     | '/title/$slug'
     | '/admin/'
+    | '/admin/login/confirm'
     | '/admin/titles/$id'
     | '/admin/titles/new'
     | '/admin/titles/'
@@ -193,6 +241,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AdminRoute: typeof AdminRouteWithChildren
+  AdvertiseRoute: typeof AdvertiseRoute
   TitleSlugRoute: typeof TitleSlugRouteWithChildren
 }
 
@@ -212,11 +261,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/advertise': {
+      id: '/advertise'
+      path: '/advertise'
+      fullPath: '/advertise'
+      preLoaderRoute: typeof AdvertiseRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/admin/': {
       id: '/admin/'
       path: '/'
       fullPath: '/admin/'
       preLoaderRoute: typeof AdminIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/ads': {
+      id: '/admin/ads'
+      path: '/ads'
+      fullPath: '/admin/ads'
+      preLoaderRoute: typeof AdminAdsRouteImport
       parentRoute: typeof AdminRoute
     }
     '/admin/genres': {
@@ -233,6 +296,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminLoginRouteImport
       parentRoute: typeof AdminRoute
     }
+    '/admin/requests': {
+      id: '/admin/requests'
+      path: '/requests'
+      fullPath: '/admin/requests'
+      preLoaderRoute: typeof AdminRequestsRouteImport
+      parentRoute: typeof AdminRoute
+    }
     '/admin/titles': {
       id: '/admin/titles'
       path: '/titles'
@@ -246,6 +316,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/title/$slug'
       preLoaderRoute: typeof TitleSlugRouteImport
       parentRoute: typeof rootRouteImport
+    }
+    '/admin/login/confirm': {
+      id: '/admin/login/confirm'
+      path: '/confirm'
+      fullPath: '/admin/login/confirm'
+      preLoaderRoute: typeof AdminLoginConfirmRouteImport
+      parentRoute: typeof AdminLoginRoute
     }
     '/admin/titles/': {
       id: '/admin/titles/'
@@ -299,6 +376,18 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AdminLoginRouteChildren {
+  AdminLoginConfirmRoute: typeof AdminLoginConfirmRoute
+}
+
+const AdminLoginRouteChildren: AdminLoginRouteChildren = {
+  AdminLoginConfirmRoute: AdminLoginConfirmRoute,
+}
+
+const AdminLoginRouteWithChildren = AdminLoginRoute._addFileChildren(
+  AdminLoginRouteChildren,
+)
+
 interface AdminTitlesIdChaptersRouteChildren {
   AdminTitlesIdChaptersCidRoute: typeof AdminTitlesIdChaptersCidRoute
 }
@@ -343,15 +432,19 @@ const AdminTitlesRouteWithChildren = AdminTitlesRoute._addFileChildren(
 )
 
 interface AdminRouteChildren {
+  AdminAdsRoute: typeof AdminAdsRoute
   AdminGenresRoute: typeof AdminGenresRoute
-  AdminLoginRoute: typeof AdminLoginRoute
+  AdminLoginRoute: typeof AdminLoginRouteWithChildren
+  AdminRequestsRoute: typeof AdminRequestsRoute
   AdminTitlesRoute: typeof AdminTitlesRouteWithChildren
   AdminIndexRoute: typeof AdminIndexRoute
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
+  AdminAdsRoute: AdminAdsRoute,
   AdminGenresRoute: AdminGenresRoute,
-  AdminLoginRoute: AdminLoginRoute,
+  AdminLoginRoute: AdminLoginRouteWithChildren,
+  AdminRequestsRoute: AdminRequestsRoute,
   AdminTitlesRoute: AdminTitlesRouteWithChildren,
   AdminIndexRoute: AdminIndexRoute,
 }
@@ -373,6 +466,7 @@ const TitleSlugRouteWithChildren = TitleSlugRoute._addFileChildren(
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AdminRoute: AdminRouteWithChildren,
+  AdvertiseRoute: AdvertiseRoute,
   TitleSlugRoute: TitleSlugRouteWithChildren,
 }
 export const routeTree = rootRouteImport

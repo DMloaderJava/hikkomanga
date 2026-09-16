@@ -33,6 +33,13 @@ export function Header() {
             >
               Каталог
             </Link>
+            <Link
+              to="/advertise"
+              className="text-neutral-300 hover:text-white transition-colors"
+              activeProps={{ className: 'text-rose-500 font-semibold' }}
+            >
+              Реклама
+            </Link>
           </nav>
         </div>
 

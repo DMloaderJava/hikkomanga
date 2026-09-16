@@ -58,6 +58,7 @@ function AdminChapterPagesPage() {
   };
 
   const handleReorderPages = async (reorderedPages: Page[]) => {
+    const previous = pageList; // снимок до оптимистичного апдейта
     setPageList(reorderedPages);
     setError(null);
     try {
@@ -66,7 +67,7 @@ function AdminChapterPagesPage() {
         currentChapter.id
       );
     } catch (err: any) {
-      setPageList(pageList); // откат визуального порядка
+      setPageList(previous); // честный откат
       setError(err.message || 'Не удалось сохранить порядок страниц');
     }
   };
@@ -79,7 +80,6 @@ function AdminChapterPagesPage() {
       await pagesApi.delete(pageId);
       setPageList((prev) => prev.filter((p) => p.id !== pageId));
     } catch (err: any) {
-      setDeleteTarget(null);
       setError(err.message || 'Не удалось удалить страницу');
     }
   };

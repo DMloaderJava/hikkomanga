@@ -1,31 +1,36 @@
 import { supabase, isSupabaseConfigured } from './client';
 import { mockStore } from './mockStore';
-import { notifyAdminLogin } from './notify';
+import {
+  notifyAdminLogin,
+  getLoginChallengeStatus,
+  type LoginNotifyResult,
+} from './notify';
 
-/**
- * Уведомление о входе не должно ни ломать, ни замедлять вход: fire-and-forget.
- * Транспорт и секреты — см. src/data/notify.ts и SETUP_SUPABASE.md.
- */
-function fireLoginNotify(adminEmail: string) {
-  void notifyAdminLogin(adminEmail).then((r) => {
-    if (!r.ok && import.meta.env.DEV) {
-      console.warn('[login-notify] письмо не отправлено:', r.error);
-    }
-  });
-}
+export type SignInResult = {
+  data: { user: any; session: any };
+  error: Error | null;
+  /** Сессия есть, но ждём подтверждение из письма. */
+  pendingConfirmation?: boolean;
+  notify?: LoginNotifyResult;
+};
 
 /**
  * Демо-сессия для режима без Supabase. Реальных паролей в коде нет и не было:
  * в демо-режиме форма входа принимает любые непустые email и пароль — это
  * заглушка для локальной разработки, а не аутентификация. При настроенном
  * Supabase (`VITE_SUPABASE_URL` + ключ) работает только Supabase Auth.
+ *
+ * Login Guard обязателен и в демо: без подтверждения из письма (или dev-ссылки)
+ * админ-панель не откроется.
  */
 function createMockSession(email: string) {
+  // В демо без Supabase считаем единственного пользователя владельцем,
+  // чтобы локально можно было и создавать главы, и разбирать заявки.
   const mockUser = {
     id: 'demo-admin-01',
     email,
-    user_metadata: { role: 'admin' },
-    role: 'admin',
+    user_metadata: { role: 'owner' },
+    role: 'owner',
   };
   const mockSession = {
     user: mockUser,
@@ -34,8 +39,36 @@ function createMockSession(email: string) {
   return { mockUser, mockSession };
 }
 
+/**
+ * После успешного пароля: отправить письмо с challenge.
+ * Если письмо не ушло — сессию откатываем: без подтверждения входа нет.
+ */
+async function requireLoginConfirmation(
+  adminEmail: string
+): Promise<{ ok: true; notify: LoginNotifyResult } | { ok: false; error: Error; notify?: LoginNotifyResult }> {
+  const notify = await notifyAdminLogin(adminEmail);
+  if (!notify.ok) {
+    await auth.signOut();
+    return {
+      ok: false,
+      error: new Error(
+        notify.error
+          ? `Вход отклонён: не удалось отправить письмо подтверждения (${notify.error})`
+          : 'Вход отклонён: не удалось отправить письмо подтверждения'
+      ),
+      notify,
+    };
+  }
+  return { ok: true, notify };
+}
+
 export const auth = {
-  async signIn(email: string, password: string) {
+  /**
+   * Вход по email/паролю. Даже при верном пароле сессия «висит», пока
+   * владелец не подтвердит вход ссылкой из письма на OWNER_NOTIFY_EMAIL.
+   * `pendingConfirmation: true` → UI показывает экран ожидания.
+   */
+  async signIn(email: string, password: string): Promise<SignInResult> {
     const cleanEmail = email.trim().toLowerCase();
 
     // 1. Supabase Auth — единственный настоящий путь
@@ -46,9 +79,34 @@ export const auth = {
           password,
         });
         if (!error && data?.session) {
+          // Проверяем роль ДО challenge: иначе любой зарегистрированный
+          // юзер мог бы спамить письмами владельцу.
+          const isAdmin = await this.hasRole(data.session.user.id, 'admin', {
+            skipChallenge: true,
+          });
+          if (!isAdmin) {
+            await this.signOut();
+            return {
+              data: { user: null, session: null },
+              error: new Error('Нет прав администратора'),
+            };
+          }
+
           mockStore.setAdminSession(data.session);
-          fireLoginNotify(cleanEmail);
-          return { data, error: null };
+          const conf = await requireLoginConfirmation(cleanEmail);
+          if (!conf.ok) {
+            return {
+              data: { user: null, session: null },
+              error: conf.error,
+              notify: conf.notify,
+            };
+          }
+          return {
+            data: { user: data.user, session: data.session },
+            error: null,
+            pendingConfirmation: true,
+            notify: conf.notify,
+          };
         }
         if (error) {
           const message =
@@ -76,12 +134,34 @@ export const auth = {
 
     const { mockUser, mockSession } = createMockSession(cleanEmail);
     mockStore.setAdminSession(mockSession);
-    fireLoginNotify(cleanEmail);
-    return { data: { user: mockUser, session: mockSession }, error: null };
+    const conf = await requireLoginConfirmation(cleanEmail);
+    if (!conf.ok) {
+      return {
+        data: { user: null, session: null },
+        error: conf.error,
+        notify: conf.notify,
+      };
+    }
+    return {
+      data: { user: mockUser, session: mockSession },
+      error: null,
+      pendingConfirmation: true,
+      notify: conf.notify,
+    };
   },
 
   async signOut() {
     mockStore.setAdminSession(null);
+    if (typeof window !== 'undefined') {
+      try {
+        // Полный сброс LS: approved/pending/denied.
+        // Иначе soft-fail keep-alive (error + local approved) открыл бы
+        // /admin после signOut без нового письма.
+        localStorage.removeItem('manga_login_challenge');
+      } catch {
+        // ignore
+      }
+    }
     if (isSupabaseConfigured) {
       try {
         await supabase.auth.signOut();
@@ -111,40 +191,96 @@ export const auth = {
     return session?.user ?? null;
   },
 
-  async hasRole(userId: string, role: string) {
+  /**
+   * true, только если challenge ТЕКУЩЕЙ session_id = approved.
+   * Без этого админ-роуты редиректят на /admin/login.
+   *
+   * При транзиентной ошибке RPC (`status === 'error'`):
+   *  - если в localStorage уже был approved для этой вкладки → keep-alive (null),
+   *    чтобы мигающий сбой не выкидывал owner'а;
+   *  - иначе false (не улучшаем доступ).
+   * Никогда не пишем 'approved' в LS при error.
+   */
+  async isLoginConfirmed(): Promise<boolean | null> {
+    const status = await getLoginChallengeStatus();
+    if (status === 'approved') return true;
+    if (status === 'error') {
+      // Keep-alive только если локально уже подтверждали эту сессию.
+      try {
+        if (typeof window !== 'undefined') {
+          const raw = localStorage.getItem('manga_login_challenge');
+          if (raw) {
+            const ch = JSON.parse(raw) as { status?: string };
+            if (ch.status === 'approved') return null;
+          }
+        }
+      } catch {
+        // ignore
+      }
+      return false;
+    }
+    return false;
+  },
+
+  async getLoginChallengeStatus() {
+    return getLoginChallengeStatus();
+  },
+
+  async hasRole(
+    userId: string,
+    role: string,
+    opts?: { skipChallenge?: boolean }
+  ): Promise<boolean> {
     const session = await this.getSession();
     if (!session) return false;
 
     // 1. Явная локальная (демо) сессия
     const localSession = mockStore.getAdminSession();
+    let roleOk = false;
+
     if (localSession && localSession.user?.id === userId) {
       const userRole = localSession.user.user_metadata?.role || localSession.user.role;
-      if (userRole === role || userRole === 'admin') {
-        return true;
+      // owner имеет все права admin; admin ≠ owner.
+      if (
+        userRole === role ||
+        (role === 'admin' && (userRole === 'admin' || userRole === 'owner')) ||
+        (role === 'owner' && userRole === 'owner')
+      ) {
+        roleOk = true;
       }
     }
 
     // 2. Validate userId is a valid UUID before passing to Postgres RPC
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId);
-    if (!isUuid) {
-      return false;
-    }
+    // Канонический формат 8-4-4-4-12 (раньше терялась четвёртая группа → hasRole всегда false).
+    const isUuid =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(userId);
 
     // 3. Строго через Supabase RPC, если настроен
-    if (isSupabaseConfigured) {
+    if (!roleOk && isUuid && isSupabaseConfigured) {
       try {
         const { data, error } = await supabase.rpc('has_role', {
           uid: userId,
           role_to_check: role,
         });
         if (!error && typeof data === 'boolean') {
-          return data;
+          roleOk = data;
         }
       } catch {
         return false;
       }
     }
 
-    return false;
+    if (!roleOk) return false;
+
+    // 4. Login Guard: роль есть, но без подтверждения из письма — не админ.
+    //    skipChallenge: signIn до create challenge / login-notify.
+    //    confirmed === null → keep-alive (только после local approved).
+    //    confirmed === false → отказ (в т.ч. error без prior approved).
+    if (!opts?.skipChallenge) {
+      const confirmed = await this.isLoginConfirmed();
+      if (confirmed === false) return false;
+    }
+
+    return true;
   },
 };

@@ -1,5 +1,6 @@
 import { createRootRoute, Outlet, useLocation, Link } from '@tanstack/react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { Analytics } from '@vercel/analytics/react';
 import { Header } from '@/components/layout/Header';
 import { Footer } from '@/components/layout/Footer';
 import { Button } from '@/components/ui/button';
@@ -50,6 +51,8 @@ function RootComponent() {
           <Outlet />
         </div>
         {!isAdminRoute && !isReaderRoute && <Footer />}
+        {/* Vercel Web Analytics — pageviews на всех маршрутах (вкл. admin/reader). */}
+        <Analytics />
       </div>
     </QueryClientProvider>
   );
