@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured } from './client';
+import { getSupabase, isSupabaseConfigured } from './client';
 import { mockStore } from './mockStore';
 import { chapters as chaptersApi } from './chapters';
 import { storage } from './storage';
@@ -27,6 +27,7 @@ export const titles = {
   async listPublished(): Promise<Title[]> {
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { data, error } = await supabase
           .from('titles')
           .select('*, title_genres(genres(id, name))')
@@ -46,6 +47,7 @@ export const titles = {
   async listAll(): Promise<Title[]> {
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { data, error } = await supabase
           .from('titles')
           .select('*, title_genres(genres(id, name))')
@@ -64,6 +66,7 @@ export const titles = {
   async getBySlug(slug: string): Promise<Title | null> {
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { data, error } = await supabase
           .from('titles')
           .select('*, title_genres(genres(id, name))')
@@ -83,6 +86,7 @@ export const titles = {
   async getById(id: string): Promise<Title | null> {
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { data, error } = await supabase
           .from('titles')
           .select('*, title_genres(genres(id, name))')
@@ -107,6 +111,7 @@ export const titles = {
     }
 
     if (isSupabaseConfigured) {
+      const supabase = await getSupabase();
       const { genre_ids, ...titleData } = input;
       const { data, error } = await supabase
         .from('titles')
@@ -145,6 +150,7 @@ export const titles = {
     }
 
     if (isSupabaseConfigured) {
+      const supabase = await getSupabase();
       const { genre_ids, ...titleData } = input;
 
       if (Object.keys(titleData).length > 0) {
@@ -226,6 +232,7 @@ export const titles = {
     }
 
     if (isSupabaseConfigured) {
+      const supabase = await getSupabase();
       const { error } = await supabase.from('titles').delete().eq('id', id);
       if (error) {
         throw new Error(`Не удалось удалить тайтл: ${error.message}`);

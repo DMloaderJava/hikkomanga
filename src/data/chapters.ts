@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured } from './client';
+import { getSupabase, isSupabaseConfigured } from './client';
 import { mockStore } from './mockStore';
 import { pages as pagesApi } from './pages';
 import { storage } from './storage';
@@ -9,6 +9,7 @@ export const chapters = {
   async listByTitle(titleId: string, includeDrafts = false): Promise<Chapter[]> {
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         let query = supabase.from('chapters').select('*').eq('title_id', titleId);
         if (!includeDrafts) {
           query = query.eq('published', true);
@@ -28,6 +29,7 @@ export const chapters = {
   async getByNumber(titleId: string, number: number): Promise<Chapter | null> {
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { data, error } = await supabase
           .from('chapters')
           .select('*')
@@ -48,6 +50,7 @@ export const chapters = {
   async getById(id: string): Promise<Chapter | null> {
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { data, error } = await supabase
           .from('chapters')
           .select('*')
@@ -66,6 +69,7 @@ export const chapters = {
 
   async create(input: ChapterInput): Promise<Chapter> {
     if (isSupabaseConfigured) {
+      const supabase = await getSupabase();
       // Supabase сам поймает дубликат через UNIQUE (title_id, number) — код 23505.
       // Предварительный SELECT не нужен: лишний RTT и race condition.
       const { data, error } = await supabase
@@ -94,6 +98,7 @@ export const chapters = {
 
   async update(id: string, input: Partial<ChapterInput>): Promise<Chapter> {
     if (isSupabaseConfigured) {
+      const supabase = await getSupabase();
       const updateData: any = {};
       if (input.number !== undefined) updateData.number = Number(input.number);
       if (input.name !== undefined) updateData.name = input.name;
@@ -138,6 +143,7 @@ export const chapters = {
     );
 
     if (isSupabaseConfigured) {
+      const supabase = await getSupabase();
       const { error } = await supabase.from('chapters').delete().eq('id', id);
       if (error) {
         throw new Error(`Не удалось удалить главу: ${error.message}`);

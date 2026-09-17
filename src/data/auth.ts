@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured } from './client';
+import { getSupabase, isSupabaseConfigured } from './client';
 import { mockStore } from './mockStore';
 import {
   notifyAdminLogin,
@@ -74,6 +74,7 @@ export const auth = {
     // 1. Supabase Auth — единственный настоящий путь
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { data, error } = await supabase.auth.signInWithPassword({
           email: cleanEmail,
           password,
@@ -164,6 +165,7 @@ export const auth = {
     }
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         await supabase.auth.signOut();
       } catch {
         // Ignore
@@ -174,6 +176,7 @@ export const auth = {
   async getSession() {
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { data } = await supabase.auth.getSession();
         if (data?.session) {
           mockStore.setAdminSession(data.session);
@@ -189,6 +192,18 @@ export const auth = {
   async getUser() {
     const session = await this.getSession();
     return session?.user ?? null;
+  },
+
+  async onAuthStateChange(callback: (event: string, session: any) => void) {
+    if (isSupabaseConfigured) {
+      try {
+        const supabase = await getSupabase();
+        return supabase.auth.onAuthStateChange(callback);
+      } catch {
+        // Fallback
+      }
+    }
+    return { data: { subscription: { unsubscribe: () => {} } } };
   },
 
   /**
@@ -258,6 +273,7 @@ export const auth = {
     // 3. Строго через Supabase RPC, если настроен
     if (!roleOk && isUuid && isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { data, error } = await supabase.rpc('has_role', {
           uid: userId,
           role_to_check: role,

@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured } from './client';
+import { getSupabase, isSupabaseConfigured } from './client';
 import { mockStore } from './mockStore';
 import { storage } from './storage';
 import type { Page, PageInput } from './types';
@@ -7,6 +7,7 @@ export const pages = {
   async listByChapter(chapterId: string): Promise<Page[]> {
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { data, error } = await supabase
           .from('pages')
           .select('*')
@@ -26,6 +27,7 @@ export const pages = {
   async getById(id: string): Promise<Page | null> {
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { data, error } = await supabase
           .from('pages')
           .select('*')
@@ -44,6 +46,7 @@ export const pages = {
 
   async create(input: PageInput): Promise<Page> {
     if (isSupabaseConfigured) {
+      const supabase = await getSupabase();
       const { data, error } = await supabase
         .from('pages')
         .insert({
@@ -65,6 +68,7 @@ export const pages = {
 
   async updateOrder(pageOrders: { id: string; page_order: number }[], chapterId: string): Promise<void> {
     if (isSupabaseConfigured) {
+      const supabase = await getSupabase();
       const updates = pageOrders.map((item) => ({
         id: item.id,
         chapter_id: chapterId,
@@ -91,6 +95,7 @@ export const pages = {
     }
 
     if (isSupabaseConfigured) {
+      const supabase = await getSupabase();
       const { error } = await supabase.from('pages').delete().eq('id', id);
       if (error) {
         throw new Error(`Не удалось удалить страницу: ${error.message}`);

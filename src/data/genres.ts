@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured } from './client';
+import { getSupabase, isSupabaseConfigured } from './client';
 import { mockStore } from './mockStore';
 import type { Genre } from './types';
 
@@ -6,6 +6,7 @@ export const genres = {
   async list(): Promise<Genre[]> {
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { data, error } = await supabase
           .from('genres')
           .select('*')
@@ -23,6 +24,7 @@ export const genres = {
 
   async create(name: string): Promise<Genre> {
     if (isSupabaseConfigured) {
+      const supabase = await getSupabase();
       const { data, error } = await supabase
         .from('genres')
         .insert({ name: name.trim() })
@@ -42,6 +44,7 @@ export const genres = {
 
   async update(id: string, name: string): Promise<Genre> {
     if (isSupabaseConfigured) {
+      const supabase = await getSupabase();
       const { data, error } = await supabase
         .from('genres')
         .update({ name: name.trim() })
@@ -62,6 +65,7 @@ export const genres = {
 
   async delete(id: string): Promise<void> {
     if (isSupabaseConfigured) {
+      const supabase = await getSupabase();
       const { error } = await supabase.from('genres').delete().eq('id', id);
       if (error) {
         throw new Error(`Не удалось удалить жанр: ${error.message}`);
@@ -74,6 +78,7 @@ export const genres = {
   async getUsageCount(id: string): Promise<number> {
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { count, error } = await supabase
           .from('title_genres')
           .select('*', { count: 'exact', head: true })

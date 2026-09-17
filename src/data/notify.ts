@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured } from './client';
+import { getSupabase, isSupabaseConfigured } from './client';
 import { SUPABASE_URL } from '@/integrations/supabase/config';
 
 /** Почему не ушло письмо подтверждения — для точной подсказки владельцу в UI. */
@@ -183,6 +183,7 @@ export async function notifyAdminLogin(adminEmail: string): Promise<LoginNotifyR
 
   if (isSupabaseConfigured) {
     try {
+      const supabase = await getSupabase();
       const { data, error } = await supabase.functions.invoke('login-notify', {
         body: payload,
       });
@@ -288,6 +289,7 @@ export async function getLoginChallengeStatus(): Promise<LoginChallengeStatus> {
 
   if (isSupabaseConfigured && !preferDev) {
     try {
+      const supabase = await getSupabase();
       const { data, error } = await supabase.rpc('latest_login_challenge_status');
       if (!error && typeof data === 'string') return data;
       // Не глотаем RPC-ошибку как «none» — UI может показать «сервис недоступен».
@@ -421,6 +423,7 @@ export async function resolveLoginChallenge(
 
   if (isSupabaseConfigured && !emulated) {
     try {
+      const supabase = await getSupabase();
       // Edge-функция публичная; fallback — прямой RPC (anon имеет grant).
       const { data: fnData, error: fnError } = await supabase.functions.invoke(
         'login-confirm',
