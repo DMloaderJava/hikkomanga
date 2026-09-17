@@ -177,8 +177,8 @@ export async function notifyAdminLogin(adminEmail: string): Promise<LoginNotifyR
   const payload = {
     adminEmail,
     loginAt: new Date().toISOString(),
-    userAgent: navigator.userAgent,
-    siteUrl: window.location.origin,
+    userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'Node.js',
+    siteUrl: typeof window !== 'undefined' && window.location ? window.location.origin : '',
   };
 
   if (isSupabaseConfigured) {

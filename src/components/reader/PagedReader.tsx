@@ -74,7 +74,7 @@ export function PagedReader({
       pages.length > 0 &&
       index >= Math.max(0, pages.length - 2)
     ) {
-      void prefetchNextChapter(chapterTitleId, nextChapterNumber);
+      void prefetchNextChapter(chapterTitleId, nextChapterNumber).catch(() => {});
     }
   }, [index, pages.length, chapterTitleId, nextChapterNumber]);
 

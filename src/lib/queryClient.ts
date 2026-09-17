@@ -29,16 +29,21 @@ export async function prefetchNextChapter(titleId: string, nextChapterNumber: nu
     });
 
     if (nextChapter?.id) {
-      void queryClient.ensureQueryData({
-        queryKey: readerQueryKeys.pages(nextChapter.id),
-        queryFn: () => pagesApi.listByChapter(nextChapter.id),
-        staleTime: Infinity,
-      });
-      void queryClient.ensureQueryData({
-        queryKey: readerQueryKeys.nav(titleId, nextChapter.number),
-        queryFn: () => chaptersApi.getNextAndPrev(titleId, nextChapter.number),
-        staleTime: Infinity,
-      });
+      void queryClient
+        .ensureQueryData({
+          queryKey: readerQueryKeys.pages(nextChapter.id),
+          queryFn: () => pagesApi.listByChapter(nextChapter.id),
+          staleTime: Infinity,
+        })
+        .catch(() => {});
+
+      void queryClient
+        .ensureQueryData({
+          queryKey: readerQueryKeys.nav(titleId, nextChapter.number),
+          queryFn: () => chaptersApi.getNextAndPrev(titleId, nextChapter.number),
+          staleTime: Infinity,
+        })
+        .catch(() => {});
     }
   } catch {
     // Non-blocking prefetch error

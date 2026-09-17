@@ -66,8 +66,8 @@ function VerticalReaderPage({ page, index, altPrefix }: VerticalReaderPageProps)
           draggable={false}
           onLoad={(e) => {
             const h = e.currentTarget.offsetHeight;
-            if (h > 0 && h !== measuredHeight) {
-              setMeasuredHeight(h);
+            if (h > 0) {
+              setMeasuredHeight((prev) => (prev === h ? prev : h));
             }
           }}
         />
@@ -121,7 +121,7 @@ export function VerticalReader({
         const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;
         if (scrollHeight > 0 && window.scrollY / scrollHeight > 0.65) {
           prefetchedRef.current = true;
-          void prefetchNextChapter(chapterTitleId, nextChapterNumber);
+          void prefetchNextChapter(chapterTitleId, nextChapterNumber).catch(() => {});
         }
       }
 

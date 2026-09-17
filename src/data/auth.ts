@@ -14,6 +14,32 @@ export type SignInResult = {
   notify?: LoginNotifyResult;
 };
 
+type AuthListener = (session: any) => void;
+const authListeners = new Set<AuthListener>();
+
+/**
+ * Оповещает всех подписчиков (включая useAuth в Header) об изменении
+ * состояния авторизации без необходимости перезагрузки страницы.
+ */
+export function notifyAuthChanged(session?: any) {
+  authListeners.forEach((listener) => {
+    try {
+      listener(session);
+    } catch {
+      // ignore
+    }
+  });
+  if (typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(
+        new CustomEvent('manga-auth-change', { detail: { session } })
+      );
+    } catch {
+      // ignore
+    }
+  }
+}
+
 /**
  * Демо-сессия для режима без Supabase. Реальных паролей в коде нет и не было:
  * в демо-режиме форма входа принимает любые непустые email и пароль — это
@@ -64,6 +90,16 @@ async function requireLoginConfirmation(
 
 export const auth = {
   /**
+   * Подписка на локальные изменения auth-состояния (работает без загрузки Supabase SDK).
+   */
+  subscribe(callback: (session: any) => void): () => void {
+    authListeners.add(callback);
+    return () => {
+      authListeners.delete(callback);
+    };
+  },
+
+  /**
    * Вход по email/паролю. Даже при верном пароле сессия «висит», пока
    * владелец не подтвердит вход ссылкой из письма на OWNER_NOTIFY_EMAIL.
    * `pendingConfirmation: true` → UI показывает экран ожидания.
@@ -94,6 +130,7 @@ export const auth = {
           }
 
           mockStore.setAdminSession(data.session);
+          notifyAuthChanged(data.session);
           const conf = await requireLoginConfirmation(cleanEmail);
           if (!conf.ok) {
             return {
@@ -135,6 +172,7 @@ export const auth = {
 
     const { mockUser, mockSession } = createMockSession(cleanEmail);
     mockStore.setAdminSession(mockSession);
+    notifyAuthChanged(mockSession);
     const conf = await requireLoginConfirmation(cleanEmail);
     if (!conf.ok) {
       return {
@@ -163,6 +201,7 @@ export const auth = {
         // ignore
       }
     }
+    notifyAuthChanged(null);
     if (isSupabaseConfigured) {
       try {
         const supabase = await getSupabase();
@@ -198,7 +237,10 @@ export const auth = {
     if (isSupabaseConfigured) {
       try {
         const supabase = await getSupabase();
-        return supabase.auth.onAuthStateChange(callback);
+        return supabase.auth.onAuthStateChange((event, newSession) => {
+          notifyAuthChanged(newSession);
+          callback(event, newSession);
+        });
       } catch {
         // Fallback
       }

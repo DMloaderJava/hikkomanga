@@ -5,6 +5,12 @@ import { pages } from '@/data/pages';
 import { readerQueryKeys } from '@/lib/queryClient';
 import type { Title, Chapter, Page } from '@/data/types';
 
+/**
+ * Хук для автономного получения данных главы, страниц и навигации через TanStack Query.
+ * Используется в виджетах и компонентах предварительного просмотра глав.
+ * Основной роут `/title/$slug/chapter/$number` использует loader + useQuery напрямую
+ * для SSR/SSG пререндеринга без водопада запросов.
+ */
 export function useChapter(slug: string, chapterNumber: number) {
   const {
     data: title,

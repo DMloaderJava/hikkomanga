@@ -32,6 +32,7 @@ globalThis.localStorage = {
   clear: () => store.clear(),
 };
 globalThis.window = globalThis;
+globalThis.window.location = { origin: 'http://localhost:3000' };
 
 const { auth } = await vite.ssrLoadModule('/src/data/auth.ts');
 const { mockStore } = await vite.ssrLoadModule('/src/data/mockStore.ts');
@@ -447,8 +448,67 @@ if (newCh) {
   await chapters.delete(newCh.id);
 }
 
+// ── 6. useAuth reactive login flow without reload & session persistence ────
+store.clear();
+mockStore.setAdminSession(null);
+
+// Anonymous guest starts with no session and no stored credentials
+let guestSession = null;
+let guestIsAdmin = false;
+
+// Subscribe to auth events (as useAuth does in Header without initial Supabase SDK)
+const unsubscribeGuest = auth.subscribe(async (incomingSession) => {
+  guestSession = incomingSession !== undefined ? incomingSession : await auth.getSession();
+  if (guestSession?.user) {
+    guestIsAdmin = await auth.hasRole(guestSession.user.id, 'admin', { skipChallenge: true });
+  } else {
+    guestIsAdmin = false;
+  }
+});
+
+check('guest initial state unauthenticated', guestSession === null && guestIsAdmin === false);
+
+// Guest signs in via dialog (auth.signIn)
+const loginResult = await auth.signIn('admin@hikkomanga.local', 'somepass');
+check(
+  'signIn returns session or pending confirmation',
+  Boolean(loginResult.data?.session || loginResult.pendingConfirmation)
+);
+
+// Listener fired and updated state without page reload
+check(
+  'guest → login via dialog → header shows authenticated user without full page reload',
+  guestSession !== null && guestSession.user.email === 'admin@hikkomanga.local' && guestIsAdmin === true
+);
+
+// Sign out also notifies and resets state
+await auth.signOut();
+check(
+  'guest → signOut resets authenticated user without full page reload',
+  guestSession === null && guestIsAdmin === false
+);
+unsubscribeGuest();
+
 globalThis.fetch = realFetch;
 http.close();
+
+// Verify session persistence across simulated reload (localStorage)
+mockStore.setAdminSession(ownerSession);
+store.set(
+  'manga_login_challenge',
+  JSON.stringify({
+    id: 'ch-persisted',
+    status: 'approved',
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+  })
+);
+const restoredSession = await auth.getSession();
+const restoredAdmin = await auth.hasRole(restoredSession.user.id, 'admin');
+check(
+  'session persistence across simulated page reload with localStorage',
+  restoredSession !== null && restoredAdmin === true
+);
+
 await vite.close();
 
 console.log(
