@@ -174,3 +174,19 @@
 
 3. **Контроль метрик:**
    - Повторные замеры сборки и задержек после каждой оптимизации с заполнением колонки «After».
+
+---
+
+## 6. Лог выполнения оптимизаций (Этап 2)
+
+### Шаг 1: `<img>` атрибуты и окно предзагрузки в Reader
+- **Файлы:** `src/components/reader/VerticalReader.tsx`, `src/components/reader/PagedReader.tsx`.
+- **Изменения:**
+  * Первая страница главы (index 0): `fetchPriority="high"`, `decoding="sync"`, `loading="eager"`. LCP-critical img attribution: **1**.
+  * Последующие страницы: `fetchPriority="auto"`, `decoding="async"`, `loading="lazy"`.
+  * `PagedReader`: расширено окно предзагрузки до `index ± 2` с дедупликацией через `prefetchedUrlsRef` (Set) и очисткой в `useEffect cleanup`.
+- **Метрики:**
+  * Initial JS: 613.53 kB raw / 185.43 kB gzip (без изменений, как и ожидалось).
+  * Количество JS-чанков: 58 (без изменений).
+  * Регрессии: не обнаружено, тесты и typecheck пройдены.
+

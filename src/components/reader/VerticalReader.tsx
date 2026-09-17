@@ -68,7 +68,9 @@ export function VerticalReader({ pages, altPrefix, titleSlug, chapterNumber }: V
           key={p.id}
           src={p.image_url}
           alt={`${altPrefix}, страница ${i + 1}`}
-          loading={i < 3 ? 'eager' : 'lazy'}
+          fetchPriority={i === 0 ? 'high' : 'auto'}
+          decoding={i === 0 ? 'sync' : 'async'}
+          loading={i === 0 ? 'eager' : 'lazy'}
           className="w-full h-auto select-none block bg-neutral-900"
           draggable={false}
         />

@@ -21,6 +21,7 @@ export function PagedReader({
   const progressKey = `hikkomanga_progress_${titleSlug}`;
   const [index, setIndex] = useState(0);
   const touchStartX = useRef<number | null>(null);
+  const prefetchedUrlsRef = useRef<Set<string>>(new Set());
 
   // Restore saved reading progress on mount
   useEffect(() => {
@@ -60,12 +61,32 @@ export function PagedReader({
     }
   }, [index, chapterNumber, pages.length, progressKey]);
 
-  // Preload next image
+  // Preload window: index ± 2 pages without duplicate requests
   useEffect(() => {
-    if (index + 1 < pages.length) {
-      const img = new Image();
-      img.src = pages[index + 1].image_url;
+    if (pages.length === 0) return;
+    const createdImages: HTMLImageElement[] = [];
+
+    for (let offset = -2; offset <= 2; offset++) {
+      if (offset === 0) continue;
+      const targetIdx = index + offset;
+      if (targetIdx >= 0 && targetIdx < pages.length) {
+        const page = pages[targetIdx];
+        if (page?.image_url && !prefetchedUrlsRef.current.has(page.image_url)) {
+          prefetchedUrlsRef.current.add(page.image_url);
+          const img = new Image();
+          img.decoding = 'async';
+          img.src = page.image_url;
+          createdImages.push(img);
+        }
+      }
     }
+
+    return () => {
+      for (const img of createdImages) {
+        img.onload = null;
+        img.onerror = null;
+      }
+    };
   }, [index, pages]);
 
   // Keyboard navigation
@@ -143,6 +164,9 @@ export function PagedReader({
         <img
           src={currentPage.image_url}
           alt={`${altPrefix}, страница ${index + 1}`}
+          fetchPriority={index === 0 ? 'high' : 'auto'}
+          decoding={index === 0 ? 'sync' : 'async'}
+          loading={index === 0 ? 'eager' : 'lazy'}
           className="max-h-[calc(100vh-8rem)] w-auto object-contain rounded shadow-2xl bg-neutral-900"
           draggable={false}
         />
