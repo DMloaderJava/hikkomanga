@@ -76,9 +76,9 @@ const ownerEmail = (args.ownerEmail || process.env.OWNER_NOTIFY_EMAIL || '').tri
 const resendKey = (args.resendKey || process.env.RESEND_API_KEY || '').trim();
 const projectRef = args.projectRef.trim();
 
-const fail = (msg) => {
+const fail = (msg, code = 1) => {
   console.error(`\n✗ ${msg}`);
-  process.exit(1);
+  process.exit(code);
 };
 
 if (!projectRef) fail('Нужен --project-ref (Supabase → Project Settings → General → Reference ID)');
@@ -88,11 +88,42 @@ if (/@example\.(com|org|net)$/i.test(ownerEmail)) {
 }
 
 const mask = (s) => (s.length > 8 ? `${s.slice(0, 7)}…${s.slice(-2)}` : '***');
+
+/** Маскирует секретные значения в аргументах для безопасного логирования. */
+const maskArg = (arg) => {
+  if (typeof arg !== 'string') return String(arg);
+  const eqIdx = arg.indexOf('=');
+  if (eqIdx !== -1) {
+    const key = arg.slice(0, eqIdx);
+    const val = arg.slice(eqIdx + 1);
+    if (/API_KEY|RESEND|OWNER_NOTIFY|SECRET|TOKEN|FROM/i.test(key)) {
+      return `${key}=${mask(val)}`;
+    }
+    return arg;
+  }
+  if (/^re_[A-Za-z0-9_-]{8,}$/.test(arg)) {
+    return mask(arg);
+  }
+  return arg;
+};
+
 const run = (cmd, cmdArgs, label, opts = {}) => {
   console.log(`\n→ ${label}`);
-  console.log(`  $ ${cmd} ${cmdArgs.join(' ')}`);
+  console.log(`  $ ${cmd} ${cmdArgs.map(maskArg).join(' ')}`);
   const r = spawnSync(cmd, cmdArgs, { stdio: 'inherit', env: process.env, ...opts });
-  if (r.status !== 0) fail(`${label} — команда завершилась с кодом ${r.status}`);
+  if (r.error) {
+    // ENOENT — supabase не в PATH, иначе — другая ошибка spawn
+    fail(`${label} — не удалось запустить ${cmd}: ${r.error.message}`);
+  }
+  if (r.signal) {
+    // Ctrl+C во время spawnSync: status=null, signal=SIGINT
+    // Завершаем с кодом 130 (SIGINT) / 143 (SIGTERM) как в shell, а не 1
+    const code = r.signal === 'SIGINT' ? 130 : r.signal === 'SIGTERM' ? 143 : 1;
+    fail(`${label} — прервано сигналом ${r.signal}`, code);
+  }
+  if (r.status !== 0) {
+    fail(`${label} — команда завершилась с кодом ${r.status}`);
+  }
 };
 
 // ── 0. supabase CLI ─────────────────────────────────────────────────────────
