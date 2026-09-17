@@ -294,8 +294,8 @@ const clsNoFn = notify.classifyEdgeFailure(
   new Error('Failed to send a request to the Edge Function')
 );
 check(
-  'classify «failed to send a request» → fn-not-deployed',
-  clsNoFn.errorKind === 'fn-not-deployed',
+  'classify «failed to send a request» → network',
+  clsNoFn.errorKind === 'network',
   clsNoFn.errorKind
 );
 

@@ -25,6 +25,9 @@
  * --from (→ секрет OWNER_NOTIFY_FROM).
  */
 import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import process from 'node:process';
 
 // ── args ────────────────────────────────────────────────────────────────────
@@ -90,26 +93,17 @@ if (/@example\.(com|org|net)$/i.test(ownerEmail)) {
 const mask = (s) => (s.length > 8 ? `${s.slice(0, 7)}…${s.slice(-2)}` : '***');
 
 /** Маскирует секретные значения в аргументах для безопасного логирования. */
-const maskArg = (arg) => {
-  if (typeof arg !== 'string') return String(arg);
-  const eqIdx = arg.indexOf('=');
-  if (eqIdx !== -1) {
-    const key = arg.slice(0, eqIdx);
-    const val = arg.slice(eqIdx + 1);
-    if (/API_KEY|RESEND|OWNER_NOTIFY|SECRET|TOKEN|FROM/i.test(key)) {
-      return `${key}=${mask(val)}`;
-    }
-    return arg;
-  }
-  if (/^re_[A-Za-z0-9_-]{8,}$/.test(arg)) {
-    return mask(arg);
-  }
-  return arg;
+const maskArg = (a) => {
+  if (typeof a !== 'string') return String(a);
+  if (/^[A-Z][A-Z0-9_]*=/.test(a)) return a.replace(/=.*$/, '=***');
+  if (/^re_[A-Za-z0-9_-]{8,}$/.test(a)) return 're_***';
+  return a;
 };
+const maskArgs = (cmdArgs) => cmdArgs.map((a, i) => (cmdArgs[i - 1] === '--password' ? '***' : maskArg(a)));
 
 const run = (cmd, cmdArgs, label, opts = {}) => {
   console.log(`\n→ ${label}`);
-  console.log(`  $ ${cmd} ${cmdArgs.map(maskArg).join(' ')}`);
+  console.log(`  $ ${cmd} ${maskArgs(cmdArgs).join(' ')}`);
   const r = spawnSync(cmd, cmdArgs, { stdio: 'inherit', env: process.env, ...opts });
   if (r.error) {
     // ENOENT — supabase не в PATH, иначе — другая ошибка spawn
@@ -157,19 +151,77 @@ if (!skipSecrets) {
     `\n→ Секреты: RESEND_API_KEY=${mask(resendKey)}, OWNER_NOTIFY_EMAIL=${ownerEmail}` +
       (args.from ? `, OWNER_NOTIFY_FROM="${args.from}"` : '')
   );
-  run('supabase', ['secrets', 'set', ...secrets, '--project-ref', projectRef], 'secrets set');
+  // Пытаемся передать секреты через --env-file, чтобы не светить их в argv (ps aux)
+  // и тем более в логах. В свежих версиях CLI флаг поддерживается.
+  let tmpDir = '';
+  let envFile = '';
+  let usedEnvFile = false;
+  try {
+    tmpDir = mkdtempSync(join(tmpdir(), 'hikkomanga-'));
+    envFile = join(tmpDir, '.env.secrets');
+    const content = secrets
+      .map((s) => {
+        const eq = s.indexOf('=');
+        const k = s.slice(0, eq);
+        const v = s.slice(eq + 1);
+        if (/[\n\r"'`$\\]|\s/.test(v)) {
+          return `${k}="${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+        }
+        return `${k}=${v}`;
+      })
+      .join('\n') + '\n';
+    writeFileSync(envFile, content, { mode: 0o600 });
+    console.log(`  (пишу секреты во временный --env-file, чтобы не попали в process list)`);
+    const r = spawnSync('supabase', ['secrets', 'set', '--env-file', envFile, '--project-ref', projectRef], {
+      stdio: 'inherit',
+      env: process.env,
+    });
+    if (r.error) throw r.error;
+    if (r.signal) {
+      const code = r.signal === 'SIGINT' ? 130 : r.signal === 'SIGTERM' ? 143 : 1;
+      fail(`secrets set — прервано сигналом ${r.signal}`, code);
+    }
+    if (r.status === 0) {
+      usedEnvFile = true;
+    } else {
+      console.warn(`⚠ supabase secrets set --env-file завершился с кодом ${r.status}, пробую inline fallback...`);
+    }
+  } catch (e) {
+    if (e && e.message && !String(e.message).includes('spawn')) {
+      console.warn(`⚠ не удалось использовать --env-file: ${e.message}, пробую inline...`);
+    }
+  } finally {
+    try {
+      if (tmpDir && existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true });
+    } catch {}
+  }
+  if (!usedEnvFile) {
+    // fallback: inline, но лог уже маскируется через maskArg
+    run('supabase', ['secrets', 'set', ...secrets, '--project-ref', projectRef], 'secrets set (inline)');
+  }
 } else {
   console.log('\n→ Пропускаю секреты (--skip-secrets)');
 }
 
 // ── 1b. Миграции (по флагу --with-db) ───────────────────────────────────────
 if (withDb) {
-  run('supabase', ['link', '--project-ref', projectRef], 'supabase link');
+  const linkArgs = ['link', '--project-ref', projectRef];
+  if (process.env.SUPABASE_DB_PASSWORD) {
+    linkArgs.push('--password', process.env.SUPABASE_DB_PASSWORD);
+  } else {
+    console.warn('⚠ SUPABASE_DB_PASSWORD не задан — supabase link может интерактивно спросить DB-пароль и повесить CI');
+  }
+  run('supabase', linkArgs, 'supabase link');
   run('supabase', ['db', 'push'], 'db push (миграции из supabase/migrations)');
 }
 
 // ── 2. Деплой функций ───────────────────────────────────────────────────────
 if (!skipDeploy) {
+  for (const n of ['login-notify', 'login-confirm']) {
+    if (!existsSync(`supabase/functions/${n}/index.ts`)) {
+      fail(`Не найден supabase/functions/${n}/index.ts — деплоить нечего`);
+    }
+  }
   run(
     'supabase',
     ['functions', 'deploy', 'login-notify', '--project-ref', projectRef],

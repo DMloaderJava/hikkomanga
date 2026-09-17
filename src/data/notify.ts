@@ -84,11 +84,12 @@ export function classifyEdgeFailure(
   const d = (detail || '').toLowerCase();
   const msg = ((error as Error)?.message || '').toLowerCase();
 
-  // 1) Функция не задеплоена: 404 от edge-рантайма или «не удалось отправить запрос».
+  // 1) Функция не задеплоена: 404 от edge-рантайма или текст «not found» в теле 4xx.
+  // Примечание: FunctionsFetchError «Failed to send a request to the Edge Function»
+  // без detail — это сеть/DNS/CORS, а не 404. Раньше ошибочно маппилось в fn-not-deployed.
   if (
     status === 404 ||
-    /function not found|not deployed|could not be found/.test(d) ||
-    (!detail && /failed to send a request to the edge function/.test(msg))
+    /function not found|not deployed|could not be found/.test(d)
   ) {
     return {
       error:
@@ -134,9 +135,22 @@ export function classifyEdgeFailure(
     };
   }
 
-  // 4) Всё остальное (ошибка challenge, auth, сеть) — как есть.
+  // 4) Сеть: FunctionsFetchError без context («Failed to send a request…») — не путать с 404.
+  if (!detail && /failed to send a request to the edge function/.test(msg)) {
+    return {
+      error:
+        'Не удалось связаться с Edge Function (сеть/DNS/CORS). ' +
+        'Проверьте: curl -s -o /dev/null -w \"%{http_code}\\n\" -X POST https://<ref>.supabase.co/functions/v1/login-notify — 401 жива, 404 не задеплоена, 000 сеть/блокировка (см. SETUP_SUPABASE.md раздел 6)',
+      errorKind: 'network',
+    };
+  }
+
+  // 5) Всё остальное (ошибка challenge, auth) — как есть.
   const text = detail || (error as Error)?.message || 'не удалось отправить письмо подтверждения';
-  return { error: text, errorKind: /fetch|network|econn|cors/i.test(text) ? 'network' : 'other' };
+  return {
+    error: text,
+    errorKind: /fetch|network|econn|cors|failed to send a request/i.test(text) ? 'network' : 'other',
+  };
 }
 
 /**
