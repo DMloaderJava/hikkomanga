@@ -84,7 +84,7 @@ function AdminLoginConfirmPage() {
   const [view, setView] = useState<View>({ kind: 'loading' });
 
   useEffect(() => {
-    updateMetaTags({ title: 'Подтверждение входа' });
+    updateMetaTags({ title: 'Подтверждение входа', noindex: true });
 
     let cancelled = false;
     (async () => {

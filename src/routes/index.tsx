@@ -7,7 +7,7 @@ import { SearchBar } from '@/components/manga/SearchBar';
 import { GenreFilter } from '@/components/manga/GenreFilter';
 import { EmptyState } from '@/components/manga/EmptyState';
 import { useDebounce } from '@/hooks/useDebounce';
-import { updateMetaTags } from '@/lib/seo';
+import { updateMetaTags, seoForRoute } from '@/lib/seo';
 import type { Title, Genre } from '@/data/types';
 import { Sparkles } from 'lucide-react';
 
@@ -30,10 +30,7 @@ function HomePage() {
   const debouncedSearch = useDebounce(searchQuery, 300);
 
   useEffect(() => {
-    updateMetaTags({
-      title: 'Каталог манги',
-      description: 'Онлайн читалка манги. Читайте популярные произведения онлайн бесплатно.',
-    });
+    updateMetaTags(seoForRoute(Route.id));
   }, []);
 
   const filteredTitles = useMemo(() => {

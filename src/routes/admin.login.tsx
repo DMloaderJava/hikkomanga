@@ -47,7 +47,7 @@ function AdminLoginPage() {
 
   // Если уже подтверждён — сразу в админку. Если challenge pending — экран ожидания.
   useEffect(() => {
-    updateMetaTags({ title: 'Вход в админ-панель' });
+    updateMetaTags({ title: 'Вход в админ-панель', noindex: true });
     let cancelled = false;
 
     (async () => {
