@@ -1,5 +1,8 @@
 import { spawn } from 'child_process';
 import http from 'http';
+import fs from 'fs';
+import path from 'path';
+import zlib from 'zlib';
 import { performance } from 'perf_hooks';
 
 async function fetchUrl(url) {
@@ -22,6 +25,16 @@ async function fetchUrl(url) {
   });
 }
 
+function computeAssetGzipSize(assetPath) {
+  const cleanPath = assetPath.replace(/^\//, '');
+  const filePath = path.join('dist', cleanPath);
+  if (fs.existsSync(filePath)) {
+    const buf = fs.readFileSync(filePath);
+    return zlib.gzipSync(buf).length;
+  }
+  return 0;
+}
+
 async function main() {
   const preview = spawn('npx', ['vite', 'preview', '--port', '4173', '--host', '127.0.0.1'], {
     stdio: 'ignore'
@@ -41,28 +54,34 @@ async function main() {
     const reader = await fetchUrl('http://127.0.0.1:4173/title/manga-demon-slayer/chapter/1');
     console.log(`- GET /title/manga-demon-slayer/chapter/1: ${reader.duration.toFixed(2)} ms (Status: ${reader.statusCode}, Size: ${reader.size} B)`);
 
-    // Parse preloaded assets
+    // Parse preloaded assets dynamically from HTML
     const preloads = Array.from(home.body.matchAll(/href="(\/assets\/[^"]+)"/g)).map(m => m[1]);
     const scripts = Array.from(home.body.matchAll(/src="(\/assets\/[^"]+)"/g)).map(m => m[1]);
     const allInitialAssets = Array.from(new Set([...scripts, ...preloads]));
 
-    let totalTransfer = 0;
+    let totalTransferRaw = 0;
+    let totalInitialJsGzip = 0;
+
     console.log(`\n- Initial Assets Count (Homepage): ${allInitialAssets.length}`);
     for (const asset of allInitialAssets) {
       const res = await fetchUrl(`http://127.0.0.1:4173${asset}`);
-      totalTransfer += res.size;
+      totalTransferRaw += res.size;
+      if (asset.endsWith('.js')) {
+        totalInitialJsGzip += computeAssetGzipSize(asset);
+      }
     }
-    console.log(`- Total Initial Transfer Size (Raw): ${(totalTransfer / 1024).toFixed(2)} kB`);
+    const initialJsGzipKb = totalInitialJsGzip / 1024;
+    console.log(`- Total Initial Transfer Size (Raw): ${(totalTransferRaw / 1024).toFixed(2)} kB`);
+    console.log(`- Total Initial JS Size (Dynamic Gzip): ${initialJsGzipKb.toFixed(2)} kB (${totalInitialJsGzip} B)`);
 
-    // Network latency simulations (Transfer Time = RTT + Size / Bandwidth)
+    // Network latency simulations based on dynamic initial JS gzip size:
     // Fast 4G: 10 Mbps (1.25 MB/s), RTT 50ms
     // Slow 4G: 1.6 Mbps (200 KB/s), RTT 150ms
     // Mobile 3G: 750 Kbps (93.75 KB/s), RTT 300ms
-    const gzipSizeKb = 185.42; // from gzip analysis
-    console.log('\n=== ESTIMATED NETWORK DOWNLOAD TIMES (Initial JS: 185.42 kB Gzip) ===');
-    console.log(`- Fast 4G (10 Mbps, 50ms RTT, 4 roundtrips): ~${(50 * 4 + (gzipSizeKb / 1250) * 1000).toFixed(0)} ms`);
-    console.log(`- Slow 4G (1.6 Mbps, 150ms RTT, 6 roundtrips): ~${(150 * 6 + (gzipSizeKb / 200) * 1000).toFixed(0)} ms`);
-    console.log(`- Mobile 3G (750 Kbps, 300ms RTT, 8 roundtrips): ~${(300 * 8 + (gzipSizeKb / 93.75) * 1000).toFixed(0)} ms`);
+    console.log(`\n=== ESTIMATED NETWORK DOWNLOAD TIMES (Initial JS: ${initialJsGzipKb.toFixed(2)} kB Gzip) ===`);
+    console.log(`- Fast 4G (10 Mbps, 50ms RTT, 4 roundtrips): ~${(50 * 4 + (initialJsGzipKb / 1250) * 1000).toFixed(0)} ms`);
+    console.log(`- Slow 4G (1.6 Mbps, 150ms RTT, 6 roundtrips): ~${(150 * 6 + (initialJsGzipKb / 200) * 1000).toFixed(0)} ms`);
+    console.log(`- Mobile 3G (750 Kbps, 300ms RTT, 8 roundtrips): ~${(300 * 8 + (initialJsGzipKb / 93.75) * 1000).toFixed(0)} ms`);
 
   } finally {
     preview.kill();
