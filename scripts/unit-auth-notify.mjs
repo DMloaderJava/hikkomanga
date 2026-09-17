@@ -290,13 +290,27 @@ check('dev status approved', st.status === 'approved', st.status);
 const cls404 = notify.classifyEdgeFailure(new Error('Edge Function returned an error'), 404);
 check('classify 404 → fn-not-deployed', cls404.errorKind === 'fn-not-deployed', cls404.errorKind);
 
-const clsNoFn = notify.classifyEdgeFailure(
+const clsFetchErr = notify.classifyEdgeFailure(
   new Error('Failed to send a request to the Edge Function')
 );
 check(
-  'classify «failed to send a request» → fn-not-deployed',
-  clsNoFn.errorKind === 'fn-not-deployed',
-  clsNoFn.errorKind
+  'classify «failed to send a request» (без context) → network',
+  clsFetchErr.errorKind === 'network',
+  clsFetchErr.errorKind
+);
+
+// Дополнительная проверка: если в detail есть "function not found" — fn-not-deployed,
+// даже без HTTP-статуса (передаём undefined явно: неявный 0/false может случайно
+// сработать в !status-проверках сети).
+const clsNotFoundText = notify.classifyEdgeFailure(
+  new Error('Edge Function returned an error'),
+  undefined,
+  'Function not found'
+);
+check(
+  'classify detail «Function not found» → fn-not-deployed',
+  clsNotFoundText.errorKind === 'fn-not-deployed',
+  clsNotFoundText.errorKind
 );
 
 const clsOwner = notify.classifyEdgeFailure(null, 500, 'OWNER_NOTIFY_EMAIL secret is not set');

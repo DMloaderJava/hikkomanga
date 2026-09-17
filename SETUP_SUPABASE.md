@@ -256,10 +256,10 @@ inline-скриптов). `style-src` оставляет `'unsafe-inline'` — T
 | Текст в скобках ошибки | Причина | Как чинить владельцу |
 | --- | --- | --- |
 | `в этой сборке вообще не настроен Supabase …` (`demo-build`) | Прод собран без `VITE_SUPABASE_URL` / ключа — сайт в демо-режиме, письмо слать нечем | Задать переменные сборки (Vercel/Lovable → Env), пересобрать, затем секреты + деплой функций |
-| `не задеплоена` / `Failed to send a request to the Edge Function` (`fn-not-deployed`) | `login-notify` нет в проекте | `supabase functions deploy login-notify --project-ref <ref>` (+ `login-confirm`) |
+| `не задеплоена` (HTTP 404) (`fn-not-deployed`) | `login-notify` нет в проекте | `supabase functions deploy login-notify --project-ref <ref>` (+ `login-confirm`) |
 | `не задан OWNER_NOTIFY_EMAIL` / `не задан RESEND_API_KEY` (`secrets-missing`) | Функция задеплоена, но секретов нет | `supabase secrets set OWNER_NOTIFY_EMAIL=… RESEND_API_KEY=… --project-ref <ref>` |
 | `Resend не принял письмо: …` (`resend`) | Ключ/домен отправителя не прошли в Resend | Проверить `RESEND_API_KEY`; `onboarding@resend.dev` шлёт **только на адрес аккаунта** — иначе подтвердить домен и задать `OWNER_NOTIFY_FROM` |
-| сетевая ошибка (`network`) | Браузер не достучался до `<ref>.supabase.co` | Повторить; проверить блокировщики/файрвол |
+| `Не удалось достучаться до Edge Function … сетевая ошибка, блокировка или CORS` (`network`) | Запрос не дошёл до edge-гейтвея: DNS/CORS/файрвол/блокировщик (приходит как FunctionsFetchError без context/status) | Проверить доступность `<ref>.supabase.co`; curl-проверка ниже; если curl показывает 404 — задеплоить функцию; если 000 — чинить сеть |
 
 Быстрая самопроверка без браузера (функция жива ⇒ не 404):
 
