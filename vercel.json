@@ -4,7 +4,10 @@
   "framework": "vite",
   "trailingSlash": false,
   "rewrites": [
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    {
+      "source": "/((?!api(?:/|$)|assets(?:/|$)|media(?:/|$)|google[^/]+\\.html$|yandex_[^/]+\\.html$|sitemap\\.xml$|robots\\.txt$).*)",
+      "destination": "/index.html"
+    }
   ],
   "headers": [
     {

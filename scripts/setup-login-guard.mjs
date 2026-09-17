@@ -110,10 +110,10 @@ function cleanupSecretsFile() {
   }
 }
 
-const fail = (msg) => {
+const fail = (msg, code = 1) => {
   cleanupSecretsFile();
   console.error(`\n✗ ${msg}`);
-  process.exit(1);
+  process.exit(code);
 };
 
 // Сигналы МЕЖДУ spawnSync-вызовами (пока event loop жив) — чистим temp и выходим
@@ -136,10 +136,26 @@ if (/@example\.(com|org|net)$/i.test(ownerEmail)) {
 const mask = (s) => (s.length > 8 ? `${s.slice(0, 7)}…${s.slice(-2)}` : '***');
 
 /**
- * Маскирует значения в аргументах вида KEY=value при выводе в лог.
- * Значение заменяется на ***; имя переменной остаётся.
+ * Маскирует секретные значения в аргументах при выводе в лог.
+ * Целится по именам (…API_KEY|RESEND|OWNER_NOTIFY|SECRET|TOKEN|FROM) и по голым
+ * значениям, похожим на Resend-ключи (re_…). Значения заменяются на `***` через mask();
+ * обычные аргументы и именованные флаги с не-секретными значениями не трогаются.
  */
-const maskArg = (a) => (/^[A-Z][A-Z0-9_]*=/.test(a) ? a.replace(/=.*$/, '=***') : a);
+const maskArg = (arg) => {
+  if (typeof arg !== 'string') return String(arg);
+  const eqIdx = arg.indexOf('=');
+  if (eqIdx !== -1) {
+    const key = arg.slice(0, eqIdx);
+    if (/API_KEY|RESEND|OWNER_NOTIFY|SECRET|TOKEN|FROM/i.test(key)) {
+      return `${key}=${mask(arg.slice(eqIdx + 1))}`;
+    }
+    return arg;
+  }
+  if (/^re_[A-Za-z0-9_-]{8,}$/.test(arg)) {
+    return mask(arg);
+  }
+  return arg;
+};
 
 const run = (cmd, cmdArgs, label, opts = {}) => {
   console.log(`\n→ ${label}`);
@@ -148,14 +164,24 @@ const run = (cmd, cmdArgs, label, opts = {}) => {
   // spawnSync НЕ бросает при ошибке запуска (ENOENT) / сигнале — кладёт в r.error / r.signal,
   // а r.status при этом === null. Проверяем по порядку, чтобы fail() показал внятную причину
   // и чтобы cleanup отработал до process.exit.
-  if (r.error) fail(`${label} — ${r.error.message}`);
-  if (r.signal) {
-    // Передаём сигнал дальше стандартным exit-кодом 128 + signo, но сначала чистим temp.
-    cleanupSecretsFile();
-    const signo = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGKILL: 9, SIGTERM: 15 }[r.signal] ?? 0;
-    process.exit(128 + signo);
+  if (r.error) {
+    // ENOENT — supabase не в PATH, иначе — другая ошибка spawn.
+    fail(`${label} — не удалось запустить ${cmd}: ${r.error.message}`);
   }
-  if (r.status !== 0) fail(`${label} — команда завершилась с кодом ${r.status}`);
+  if (r.signal) {
+    // Ctrl+C во время spawnSync: status=null, signal=SIGINT.
+    // Завершаем с кодом 130 (SIGINT) / 143 (SIGTERM) как в shell, а не 1.
+    // (fail() вызовет cleanupSecretsFile() сам.)
+    const code =
+      r.signal === 'SIGINT' ? 130 :
+      r.signal === 'SIGTERM' ? 143 :
+      r.signal === 'SIGHUP' ? 129 :
+      1;
+    fail(`${label} — прервано сигналом ${r.signal}`, code);
+  }
+  if (r.status !== 0) {
+    fail(`${label} — команда завершилась с кодом ${r.status}`);
+  }
 };
 
 // ── 0. supabase CLI ─────────────────────────────────────────────────────────
