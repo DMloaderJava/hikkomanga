@@ -4,11 +4,10 @@
   "framework": "vite",
   "trailingSlash": false,
   "rewrites": [
-    { "source": "/google65ee958671ecedb0.html", "destination": "/google65ee958671ecedb0.html" },
-    { "source": "/yandex_4ba4f536815316a1.html", "destination": "/yandex_4ba4f536815316a1.html" },
-    { "source": "/sitemap.xml", "destination": "/sitemap.xml" },
-    { "source": "/robots.txt", "destination": "/robots.txt" },
-    { "source": "/((?!api/).*)", "destination": "/index.html" }
+    {
+      "source": "/((?!api(?:/|$)|assets(?:/|$)|media(?:/|$)|google[^/]+\\.html$|yandex_[^/]+\\.html$|sitemap\\.xml$|robots\\.txt$).*)",
+      "destination": "/index.html"
+    }
   ],
   "headers": [
     {
