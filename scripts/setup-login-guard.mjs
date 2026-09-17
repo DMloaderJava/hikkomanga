@@ -32,6 +32,7 @@ const argv = process.argv.slice(2);
 const args = { projectRef: '', ownerEmail: '', resendKey: '', from: '' };
 let skipSecrets = false;
 let skipDeploy = false;
+let withDb = false;
 
 function usage(code = 0) {
   console.log(
@@ -39,7 +40,9 @@ function usage(code = 0) {
       'Использование:',
       '  node scripts/setup-login-guard.mjs --project-ref <ref> \\',
       '    --owner-email you@domain.tld --resend-key re_xxx \\',
-      '    [--from "Name <noreply@domain.tld>"] [--skip-secrets] [--skip-deploy]',
+      '    [--from "Name <noreply@domain.tld>"] [--with-db] [--skip-secrets] [--skip-deploy]',
+      '',
+      '  --with-db  накатить миграции из supabase/migrations (supabase link + db push).',
       '',
       'Секреты можно задать и через окружение: OWNER_NOTIFY_EMAIL, RESEND_API_KEY.',
       'Требуется: supabase CLI (`npm i -g supabase && supabase login`)',
@@ -59,6 +62,7 @@ for (let i = 0; i < argv.length; i++) {
     case '--from': args.from = next(); break;
     case '--skip-secrets': skipSecrets = true; break;
     case '--skip-deploy': skipDeploy = true; break;
+    case '--with-db': withDb = true; break;
     case '-h': case '--help': usage(0); break;
     default:
       console.error(`Неизвестный аргумент: ${a}`);
@@ -107,8 +111,14 @@ if (!skipSecrets) {
   if (!ownerEmail) {
     fail('Нужен --owner-email (или переменная OWNER_NOTIFY_EMAIL) — куда слать письма');
   }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(ownerEmail)) {
+    fail(`OWNER_NOTIFY_EMAIL="${ownerEmail}" не похож на email`);
+  }
   if (!resendKey) {
     fail('Нужен --resend-key (или переменная RESEND_API_KEY) — ключ с resend.com → API Keys');
+  }
+  if (!/^re_[A-Za-z0-9_-]{8,}$/.test(resendKey)) {
+    fail('RESEND_API_KEY должен начинаться с re_… (resend.com → API Keys)');
   }
   const secrets = [`RESEND_API_KEY=${resendKey}`, `OWNER_NOTIFY_EMAIL=${ownerEmail}`];
   if (args.from) secrets.push(`OWNER_NOTIFY_FROM=${args.from}`);
@@ -119,6 +129,12 @@ if (!skipSecrets) {
   run('supabase', ['secrets', 'set', ...secrets, '--project-ref', projectRef], 'secrets set');
 } else {
   console.log('\n→ Пропускаю секреты (--skip-secrets)');
+}
+
+// ── 1b. Миграции (по флагу --with-db) ───────────────────────────────────────
+if (withDb) {
+  run('supabase', ['link', '--project-ref', projectRef], 'supabase link');
+  run('supabase', ['db', 'push'], 'db push (миграции из supabase/migrations)');
 }
 
 // ── 2. Деплой функций ───────────────────────────────────────────────────────
