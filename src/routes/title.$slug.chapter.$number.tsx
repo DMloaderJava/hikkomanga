@@ -4,7 +4,7 @@ import { titles as titlesApi } from '@/data/titles';
 import { chapters as chaptersApi } from '@/data/chapters';
 import { pages as pagesApi } from '@/data/pages';
 import { Reader } from '@/components/reader/Reader';
-import { updateMetaTags } from '@/lib/seo';
+import { updateMetaTags, seoForRoute } from '@/lib/seo';
 import type { Title, Chapter, Page } from '@/data/types';
 
 export const Route = createFileRoute('/title/$slug/chapter/$number')({
@@ -43,10 +43,7 @@ function ReaderPage() {
 
   useEffect(() => {
     if (title && chapter) {
-      updateMetaTags({
-        title: `${title.title} — Глава ${chapter.number}`,
-        description: `Читать главу ${chapter.number} манги ${title.title} онлайн`,
-      });
+      updateMetaTags(seoForRoute(Route.id, { title, chapter }));
     }
   }, [title, chapter]);
 

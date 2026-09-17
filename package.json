@@ -4,7 +4,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && node scripts/generate-sitemap.mjs && node scripts/prerender.mjs",
+    "build:spa": "vite build",
+    "prerender": "node scripts/prerender.mjs",
+    "sitemap": "node scripts/generate-sitemap.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "test": "node scripts/smoke-data-layer.mjs && node scripts/unit-auth-notify.mjs",

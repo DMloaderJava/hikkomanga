@@ -2,7 +2,7 @@ import { createFileRoute } from '@tanstack/react-router';
 import { RequestForm } from '@/components/admin/RequestForm';
 import { Megaphone } from 'lucide-react';
 import { useEffect } from 'react';
-import { updateMetaTags } from '@/lib/seo';
+import { updateMetaTags, seoForRoute } from '@/lib/seo';
 
 export const Route = createFileRoute('/advertise')({
   component: AdvertisePage,
@@ -10,10 +10,7 @@ export const Route = createFileRoute('/advertise')({
 
 function AdvertisePage() {
   useEffect(() => {
-    updateMetaTags({
-      title: 'Реклама на Hikkomanga',
-      description: 'Разместите баннер между главами манги для активной аудитории читателей.',
-    });
+    updateMetaTags(seoForRoute(Route.id));
   }, []);
 
   return (

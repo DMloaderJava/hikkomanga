@@ -5,7 +5,7 @@ import { chapters as chaptersApi } from '@/data/chapters';
 import { ChapterList } from '@/components/manga/ChapterList';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { updateMetaTags } from '@/lib/seo';
+import { updateMetaTags, seoForRoute } from '@/lib/seo';
 import type { Title, Chapter } from '@/data/types';
 import { BookOpen, User, Play, Bookmark } from 'lucide-react';
 
@@ -30,11 +30,7 @@ function TitleDetailsPage() {
 
   useEffect(() => {
     if (title) {
-      updateMetaTags({
-        title: title.title,
-        description: title.description || `Читать мангу ${title.title} онлайн`,
-        image: title.cover_url || undefined,
-      });
+      updateMetaTags(seoForRoute(Route.id, { title }));
 
       // Check saved progress
       try {
