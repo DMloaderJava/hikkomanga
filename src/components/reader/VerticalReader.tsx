@@ -1,16 +1,27 @@
 import { useEffect, useRef } from 'react';
 import type { Page } from '@/data/types';
+import { prefetchNextChapter } from '@/lib/queryClient';
 
 interface VerticalReaderProps {
   pages: Page[];
   altPrefix: string;
   titleSlug: string;
   chapterNumber: number;
+  chapterTitleId?: string;
+  nextChapterNumber?: number | null;
 }
 
-export function VerticalReader({ pages, altPrefix, titleSlug, chapterNumber }: VerticalReaderProps) {
+export function VerticalReader({
+  pages,
+  altPrefix,
+  titleSlug,
+  chapterNumber,
+  chapterTitleId,
+  nextChapterNumber,
+}: VerticalReaderProps) {
   const progressKey = `hikkomanga_progress_${titleSlug}`;
   const containerRef = useRef<HTMLDivElement>(null);
+  const prefetchedRef = useRef(false);
 
   // Restore scroll position or bookmark on load
   useEffect(() => {
@@ -27,10 +38,21 @@ export function VerticalReader({ pages, altPrefix, titleSlug, chapterNumber }: V
     }
   }, [chapterNumber, progressKey]);
 
-  // Save scroll position on scroll
+  // Save scroll position on scroll & prefetch next chapter on reaching lower part of page
   useEffect(() => {
     let timeout: any;
+    prefetchedRef.current = false;
+
     const handleScroll = () => {
+      // Prefetch next chapter when scrolled > 65% of the page
+      if (!prefetchedRef.current && chapterTitleId && nextChapterNumber != null) {
+        const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;
+        if (scrollHeight > 0 && window.scrollY / scrollHeight > 0.65) {
+          prefetchedRef.current = true;
+          void prefetchNextChapter(chapterTitleId, nextChapterNumber);
+        }
+      }
+
       clearTimeout(timeout);
       timeout = setTimeout(() => {
         try {
@@ -51,7 +73,7 @@ export function VerticalReader({ pages, altPrefix, titleSlug, chapterNumber }: V
       clearTimeout(timeout);
       window.removeEventListener('scroll', handleScroll);
     };
-  }, [chapterNumber, progressKey]);
+  }, [chapterNumber, progressKey, chapterTitleId, nextChapterNumber]);
 
   if (pages.length === 0) {
     return (

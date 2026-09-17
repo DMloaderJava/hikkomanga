@@ -12,6 +12,7 @@ try {
   const { chapters } = await server.ssrLoadModule('/src/data/chapters.ts');
   const { pages } = await server.ssrLoadModule('/src/data/pages.ts');
   const { genres } = await server.ssrLoadModule('/src/data/genres.ts');
+  const { queryClient, readerQueryKeys } = await server.ssrLoadModule('/src/lib/queryClient.ts');
 
   console.log('=== DATA & READER TIMING BENCHMARKS ===');
 
@@ -64,8 +65,63 @@ try {
   }
   const t7 = performance.now();
   const avgUncached = (t7 - t6) / iterations;
-  console.log(`- Reader Repeated Uncached Loader: ${avgUncached.toFixed(2)} ms / navigation (50 iterations avg)`);
+  console.log(`- Reader Repeated Uncached Loader: ${avgUncached.toFixed(4)} ms / navigation (50 iterations avg)`);
+
+  // 5. Repeated Cached Navigation via QueryClient (50 iterations)
+  // Ensure cache is populated
+  const td = await queryClient.ensureQueryData({
+    queryKey: readerQueryKeys.title(title.slug),
+    queryFn: () => titles.getBySlug(title.slug),
+    staleTime: 1000 * 60 * 5,
+  });
+  const cd = await queryClient.ensureQueryData({
+    queryKey: readerQueryKeys.chapter(td.id, chapter1.number),
+    queryFn: () => chapters.getByNumber(td.id, chapter1.number),
+    staleTime: Infinity,
+  });
+  await Promise.all([
+    queryClient.ensureQueryData({
+      queryKey: readerQueryKeys.pages(cd.id),
+      queryFn: () => pages.listByChapter(cd.id),
+      staleTime: Infinity,
+    }),
+    queryClient.ensureQueryData({
+      queryKey: readerQueryKeys.nav(td.id, cd.number),
+      queryFn: () => chapters.getNextAndPrev(td.id, cd.number),
+      staleTime: Infinity,
+    }),
+  ]);
+
+  const t8 = performance.now();
+  for (let i = 0; i < iterations; i++) {
+    const qTitle = await queryClient.ensureQueryData({
+      queryKey: readerQueryKeys.title(title.slug),
+      queryFn: () => titles.getBySlug(title.slug),
+      staleTime: 1000 * 60 * 5,
+    });
+    const qChapter = await queryClient.ensureQueryData({
+      queryKey: readerQueryKeys.chapter(qTitle.id, chapter1.number),
+      queryFn: () => chapters.getByNumber(qTitle.id, chapter1.number),
+      staleTime: Infinity,
+    });
+    await Promise.all([
+      queryClient.ensureQueryData({
+        queryKey: readerQueryKeys.pages(qChapter.id),
+        queryFn: () => pages.listByChapter(qChapter.id),
+        staleTime: Infinity,
+      }),
+      queryClient.ensureQueryData({
+        queryKey: readerQueryKeys.nav(qTitle.id, qChapter.number),
+        queryFn: () => chapters.getNextAndPrev(qTitle.id, qChapter.number),
+        staleTime: Infinity,
+      }),
+    ]);
+  }
+  const t9 = performance.now();
+  const avgCached = (t9 - t8) / iterations;
+  console.log(`- Reader Cached Repeat Navigation (QueryClient): ${avgCached.toFixed(4)} ms / navigation (50 iterations avg)`);
 
 } finally {
   await server.close();
+  process.exit(0);
 }

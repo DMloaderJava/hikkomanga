@@ -190,19 +190,24 @@
   * Количество JS-чанков: 58 (без изменений).
   * Регрессии: не обнаружено, тесты и typecheck пройдены.
 
-### Шаг 2: Вынос Supabase SDK из Initial Bundle (Lazy Client & Auth)
-- **Файлы:** `src/integrations/supabase/client.ts`, `src/data/client.ts`, `src/data/auth.ts`, `src/data/titles.ts`, `src/data/genres.ts`, `src/data/chapters.ts`, `src/data/pages.ts`, `src/data/ads.ts`, `src/data/notify.ts`, `src/data/storage.ts`, `src/data/voiceover.ts`, `src/data/adminRequests.ts`, `src/data/gemini.ts`, `src/hooks/useAuth.ts`.
+### Шаг 3: TanStack Query в Reader (Data Layer Caching & Prefetching)
+- **Файлы:** `src/lib/queryClient.ts`, `src/routes/__root.tsx`, `src/routes/title.$slug.chapter.$number.tsx`, `src/hooks/useChapter.ts`, `src/components/reader/Reader.tsx`, `src/components/reader/PagedReader.tsx`, `src/components/reader/VerticalReader.tsx`, `scripts/benchmark-reader.mjs`.
 - **Изменения:**
-  * `src/integrations/supabase/client.ts`: переведён на асинхронный синглтон `getSupabase()` с динамическим `await import('@supabase/supabase-js')`. Статический импорт SDK полностью исключён.
-  * Все методы data-слоя переведены на вызов `await getSupabase()` по требованию.
-  * `useAuth`: для анонимных пользователей на публичных страницах отключена автоматическая инициализация Supabase SDK; подгрузка происходит только при наличии сохранённой сессии (`localStorage`) или при переходе в `/admin/*`.
-- **Метрики (Before -> After):**
-  * **Initial JS Raw:** `613.53 kB` -> **`405.07 kB`** (**-208.46 kB / -34.0%**)
-  * **Initial JS Gzip:** `185.42 kB` -> **`132.44 kB`** (**-52.98 kB / -28.6%**)
-  * **Estimated Initial Fast 4G:** `348 ms` -> **`306 ms`**
-  * **Estimated Initial Slow 4G:** `1827 ms` -> **`1562 ms`** (-265 ms)
-  * **Estimated Initial 3G:** `4378 ms` -> **`3813 ms`** (-565 ms)
-  * `@supabase/supabase-js` полностью изолирован в ленивый чанк `dist/assets/dist-*.js` (209.5 kB raw / 53.3 kB gzip), отсутствующий в `index.html` modulepreload.
-- **Регрессии:** Все unit/smoke тесты (`npm test`) и `tsc --noEmit` пройдены чисто. Login Guard и эмуляция работают без сбоев.
+  * Создана фабрика ключей `readerQueryKeys` (`['title', slug]`, `['chapter', titleId, number]`, `['pages', chapterId]`, `['nav', titleId, number]`).
+  * Настроен единый `queryClient` с `staleTime: 5 min` по умолчанию и `gcTime: 30 min`.
+  * `Route.loader` и `ReaderPage` синхронизированы через `ensureQueryData` и `useQuery` с политикой:
+    - `pages`, `chapter`, `nav`: `staleTime: Infinity` (неизменяемый контент глав).
+    - `title`: `staleTime: 5 min`.
+  * `PagedReader` и `VerticalReader` получили упреждающий `prefetchNextChapter()`:
+    - В `PagedReader`: срабатывает при переходе на предпоследнюю/последнюю страницу (`index >= pages.length - 2`).
+    - В `VerticalReader`: срабатывает при прокрутке > 65% высоты контента главы.
+    - Предзагружается строго следующая глава (+1), предотвращая избыточный сетевой трафик.
+  * Рефакторинг `useChapter.ts` на использование TanStack `useQuery`.
+  * Расширен `scripts/benchmark-reader.mjs` замером `Reader Cached Repeat Navigation (QueryClient)`.
+- **Метрики:**
+  * Reader Repeated Navigation: моментальный мгновенный доступ из памяти кэша QueryClient.
+  * Prerender (`scripts/prerender.mjs`) успешно отрабатывает и прогревает SSR-кэш без сбоев.
+  * Typecheck (`tsc --noEmit`) и Unit tests (`npm test`) пройдены на 100%.
+
 
 

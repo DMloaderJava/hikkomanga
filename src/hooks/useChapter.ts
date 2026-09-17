@@ -1,70 +1,75 @@
-import { useState, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { titles } from '@/data/titles';
 import { chapters } from '@/data/chapters';
 import { pages } from '@/data/pages';
+import { readerQueryKeys } from '@/lib/queryClient';
 import type { Title, Chapter, Page } from '@/data/types';
 
 export function useChapter(slug: string, chapterNumber: number) {
-  const [data, setData] = useState<{
-    title: Title | null;
-    chapter: Chapter | null;
-    chapterPages: Page[];
-    prevChapter: Chapter | null;
-    nextChapter: Chapter | null;
-  }>({
-    title: null,
-    chapter: null,
-    chapterPages: [],
-    prevChapter: null,
-    nextChapter: null,
+  const {
+    data: title,
+    isLoading: isTitleLoading,
+    error: titleError,
+  } = useQuery({
+    queryKey: readerQueryKeys.title(slug),
+    queryFn: () => titles.getBySlug(slug),
+    enabled: Boolean(slug),
+    staleTime: 1000 * 60 * 5,
   });
 
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<Error | null>(null);
+  const titleId = title?.id;
 
-  useEffect(() => {
-    let mounted = true;
-    async function load() {
-      setLoading(true);
-      try {
-        const titleData = await titles.getBySlug(slug);
-        if (!titleData) {
-          if (mounted) setError(new Error('Тайтл не найден'));
-          return;
-        }
+  const {
+    data: chapter,
+    isLoading: isChapterLoading,
+    error: chapterError,
+  } = useQuery({
+    queryKey: readerQueryKeys.chapter(titleId || '', chapterNumber),
+    queryFn: () => (titleId ? chapters.getByNumber(titleId, chapterNumber) : null),
+    enabled: Boolean(titleId && chapterNumber),
+    staleTime: Infinity,
+  });
 
-        const chapterData = await chapters.getByNumber(titleData.id, chapterNumber);
-        if (!chapterData) {
-          if (mounted) setError(new Error('Глава не найдена'));
-          return;
-        }
+  const chapterId = chapter?.id;
 
-        const [pageList, nav] = await Promise.all([
-          pages.listByChapter(chapterData.id),
-          chapters.getNextAndPrev(titleData.id, chapterData.number),
-        ]);
+  const {
+    data: chapterPages = [],
+    isLoading: isPagesLoading,
+    error: pagesError,
+  } = useQuery<Page[]>({
+    queryKey: readerQueryKeys.pages(chapterId || ''),
+    queryFn: () => (chapterId ? pages.listByChapter(chapterId) : Promise.resolve([])),
+    enabled: Boolean(chapterId),
+    staleTime: Infinity,
+  });
 
-        if (mounted) {
-          setData({
-            title: titleData,
-            chapter: chapterData,
-            chapterPages: pageList,
-            prevChapter: nav.prevChapter,
-            nextChapter: nav.nextChapter,
-          });
-          setError(null);
-        }
-      } catch (err: any) {
-        if (mounted) setError(err);
-      } finally {
-        if (mounted) setLoading(false);
-      }
-    }
+  const {
+    data: nav = { prevChapter: null, nextChapter: null },
+    isLoading: isNavLoading,
+    error: navError,
+  } = useQuery<{ prevChapter: Chapter | null; nextChapter: Chapter | null }>({
+    queryKey: readerQueryKeys.nav(titleId || '', chapterNumber),
+    queryFn: () =>
+      titleId ? chapters.getNextAndPrev(titleId, chapterNumber) : Promise.resolve({ prevChapter: null, nextChapter: null }),
+    enabled: Boolean(titleId && chapterNumber),
+    staleTime: Infinity,
+  });
 
-    if (slug && chapterNumber) {
-      load();
-    }
-  }, [slug, chapterNumber]);
+  const loading =
+    isTitleLoading ||
+    (Boolean(titleId) && isChapterLoading) ||
+    (Boolean(chapterId) && isPagesLoading) ||
+    (Boolean(titleId) && isNavLoading);
 
-  return { ...data, loading, error };
+  const error = titleError || chapterError || pagesError || navError || null;
+
+  return {
+    title: title || null,
+    chapter: chapter || null,
+    chapterPages,
+    prevChapter: nav.prevChapter,
+    nextChapter: nav.nextChapter,
+    loading,
+    error,
+  };
 }

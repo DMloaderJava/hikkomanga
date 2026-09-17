@@ -2,12 +2,15 @@ import { useState, useEffect, useRef } from 'react';
 import type { Page } from '@/data/types';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { prefetchNextChapter } from '@/lib/queryClient';
 
 interface PagedReaderProps {
   pages: Page[];
   altPrefix: string;
   titleSlug: string;
   chapterNumber: number;
+  chapterTitleId?: string;
+  nextChapterNumber?: number | null;
   onChapterEnd?: () => void;
 }
 
@@ -16,6 +19,8 @@ export function PagedReader({
   altPrefix,
   titleSlug,
   chapterNumber,
+  chapterTitleId,
+  nextChapterNumber,
   onChapterEnd,
 }: PagedReaderProps) {
   const progressKey = `hikkomanga_progress_${titleSlug}`;
@@ -60,6 +65,18 @@ export function PagedReader({
       // Ignore
     }
   }, [index, chapterNumber, pages.length, progressKey]);
+
+  // Next chapter TanStack query prefetch on penultimate/last page
+  useEffect(() => {
+    if (
+      chapterTitleId &&
+      nextChapterNumber != null &&
+      pages.length > 0 &&
+      index >= Math.max(0, pages.length - 2)
+    ) {
+      void prefetchNextChapter(chapterTitleId, nextChapterNumber);
+    }
+  }, [index, pages.length, chapterTitleId, nextChapterNumber]);
 
   // Preload window: index ± 2 pages without duplicate requests
   useEffect(() => {
