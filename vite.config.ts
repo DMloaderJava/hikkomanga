@@ -394,6 +394,43 @@ export default defineConfig(({ mode }) => {
       port: 3000,
       allowedHosts: true,
     },
+    build: {
+      target: 'es2022',
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('node_modules')) {
+              if (
+                id.includes('/react/') ||
+                id.includes('/react-dom/') ||
+                id.includes('/scheduler/')
+              ) {
+                return 'vendor-react';
+              }
+              if (
+                id.includes('@tanstack/react-router') ||
+                id.includes('@tanstack/react-query') ||
+                id.includes('@tanstack/router-core') ||
+                id.includes('@tanstack/query-core')
+              ) {
+                return 'vendor-tanstack';
+              }
+              if (id.includes('@supabase/')) {
+                return 'vendor-supabase';
+              }
+              if (
+                id.includes('lucide-react') ||
+                id.includes('/clsx/') ||
+                id.includes('tailwind-merge') ||
+                id.includes('class-variance-authority')
+              ) {
+                return 'vendor-ui';
+              }
+            }
+          },
+        },
+      },
+    },
     optimizeDeps: {
       include: [
         'react',

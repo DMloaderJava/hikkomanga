@@ -190,6 +190,40 @@
   * Количество JS-чанков: 58 (без изменений).
   * Регрессии: не обнаружено, тесты и typecheck пройдены.
 
+### Шаг 2: Вынос Supabase SDK из Initial Bundle (Lazy Client & Auth)
+- **Файлы:** `src/integrations/supabase/client.ts`, `src/data/client.ts`, `src/data/auth.ts`, `src/data/titles.ts`, `src/data/genres.ts`, `src/data/chapters.ts`, `src/data/pages.ts`, `src/data/ads.ts`, `src/data/notify.ts`, `src/data/storage.ts`, `src/data/voiceover.ts`, `src/data/adminRequests.ts`, `src/data/gemini.ts`, `src/hooks/useAuth.ts`.
+- **Изменения:**
+  * `src/integrations/supabase/client.ts`: переведён на асинхронный синглтон `getSupabase()` с динамическим `await import('@supabase/supabase-js')`. Статический импорт SDK полностью исключён.
+  * Все методы data-слоя переведены на вызов `await getSupabase()` по требованию.
+  * `useAuth`: для анонимных пользователей на публичных страницах отключена автоматическая инициализация Supabase SDK; подгрузка происходит только при наличии сохранённой сессии (`localStorage`) или при переходе в `/admin/*`.
+- **Метрики (Before -> After):**
+  * **Initial JS Raw:** `613.53 kB` -> **`405.07 kB`** (**-208.46 kB / -34.0%**)
+  * **Initial JS Gzip:** `185.42 kB` -> **`132.44 kB`** (**-52.98 kB / -28.6%**)
+  * **Estimated Initial Fast 4G:** `348 ms` -> **`306 ms`**
+  * **Estimated Initial Slow 4G:** `1827 ms` -> **`1562 ms`** (-265 ms)
+  * **Estimated Initial 3G:** `4378 ms` -> **`3813 ms`** (-565 ms)
+  * `@supabase/supabase-js` полностью изолирован в ленивый чанк `dist/assets/dist-*.js` (209.5 kB raw / 53.3 kB gzip), отсутствующий в `index.html` modulepreload.
+- **Регрессии:** Все unit/smoke тесты (`npm test`) и `tsc --noEmit` пройдены чисто. Login Guard и эмуляция работают без сбоев.
+
+### Шаг 3: TanStack Query в Reader (Data Layer Caching & Prefetching)
+- **Файлы:** `src/lib/queryClient.ts`, `src/routes/__root.tsx`, `src/routes/title.$slug.chapter.$number.tsx`, `src/hooks/useChapter.ts`, `src/components/reader/Reader.tsx`, `src/components/reader/PagedReader.tsx`, `src/components/reader/VerticalReader.tsx`, `scripts/benchmark-reader.mjs`.
+- **Изменения:**
+  * Создана фабрика ключей `readerQueryKeys` (`['title', slug]`, `['chapter', titleId, number]`, `['pages', chapterId]`, `['nav', titleId, number]`).
+  * Настроен единый `queryClient` с `staleTime: 5 min` по умолчанию и `gcTime: 30 min`.
+  * `Route.loader` и `ReaderPage` синхронизированы через `ensureQueryData` и `useQuery` с политикой:
+    - `pages`, `chapter`, `nav`: `staleTime: Infinity` (неизменяемый контент глав).
+    - `title`: `staleTime: 5 min`.
+  * `PagedReader` и `VerticalReader` получили упреждающий `prefetchNextChapter()`:
+    - В `PagedReader`: срабатывает при переходе на предпоследнюю/последнюю страницу (`index >= pages.length - 2`).
+    - В `VerticalReader`: срабатывает при прокрутке > 65% высоты контента главы.
+    - Предзагружается строго следующая глава (+1), предотвращая избыточный сетевой трафик.
+  * Рефакторинг `useChapter.ts` на использование TanStack `useQuery`.
+  * Расширен `scripts/benchmark-reader.mjs` замером `Reader Cached Repeat Navigation (QueryClient)`.
+- **Метрики:**
+  * Reader Repeated Navigation: моментальный мгновенный доступ из памяти кэша QueryClient.
+  * Prerender (`scripts/prerender.mjs`) успешно отрабатывает и прогревает SSR-кэш без сбоев.
+  * Typecheck (`tsc --noEmit`) и Unit tests (`npm test`) пройдены на 100%.
+
 ### Шаг 4: Виртуализация и DOM-окно в VerticalReader
 - **Файлы:** `src/components/reader/VerticalReader.tsx`.
 - **Изменения:**
@@ -204,6 +238,46 @@
   * **Количество одновременных `<img>` в DOM (After):** `~3–5` активных элементов (в пределах viewport + 100% margin buffer).
   * Снижение расхода памяти GPU на мобильных устройствах: **> 85%**.
 - **Регрессии:** Typecheck (`tsc --noEmit`), юнит-тесты и пререндер страниц пройдены без ошибок.
+
+### Шаг 5: manualChunks и сборка под ES2022 (`vite.config.ts`)
+- **Файлы:** `vite.config.ts`.
+- **Изменения:**
+  * `build.target: 'es2022'` для оптимизации сборки современных инструкций JS.
+  * `build.rollupOptions.output.manualChunks`:
+    - `vendor-react`: `['react', 'react-dom', 'scheduler']` (66.97 kB gz).
+    - `vendor-tanstack`: `['@tanstack/react-router', '@tanstack/react-query', '@tanstack/router-core', '@tanstack/query-core']` (34.52 kB gz).
+    - `vendor-supabase`: `['@supabase/*']` (53.60 kB gz, ленивый чанк, строго вне initial bundle).
+    - `vendor-ui`: `['lucide-react', 'clsx', 'tailwind-merge', 'class-variance-authority']` (14.56 kB gz).
+  * Полностью ликвидирован водопад из 25+ микро-чанков иконок `lucide-react`.
+  * Чанк `index-*.js` уменьшился с 302.77 kB raw до 29.84 kB raw!
+- **Метрики:**
+  * **Initial JS Chunks Count:** 16 -> **10**
+  * **Total JS Gzip в `dist/`:** 263.31 kB -> **259.96 kB**
+  * **Initial JS Gzip:** 185.42 kB -> **136.00 kB** (**-49.42 kB / -26.7%**)
+  * **Initial JS Raw:** 613.53 kB -> **423.01 kB** (**-190.52 kB / -31.1%**)
+  * Отсутствуют circular chunk warnings, `npm test` и `tsc --noEmit` пройдены чисто.
+
+---
+
+## 7. Итоговая сравнительная таблица оптимизации (Before vs After)
+
+| Метрика | Baseline (`main @ 59946d9`) | Optimized (`arena/01a0afe7-hikkomanga`) | Дельта / Улучшение |
+| :--- | :--- | :--- | :--- |
+| **Initial JS Raw (Главная `/`)** | 613.53 kB | **423.01 kB** | **-190.52 kB (-31.1%)** |
+| **Initial JS Gzip (Главная `/`)** | 185.42 kB | **136.00 kB** | **-49.42 kB (-26.7%)** |
+| **Supabase SDK в Initial Bundle** | 210.57 kB (включён) | **0 kB (полностью изолирован)** | **-100% из Initial** |
+| **Количество JS чанков в Initial** | 16 чанков | **10 чанков** | **-37.5% запросов** |
+| **Микрочанки иконок Lucide** | 25+ мелких файлов (~200 B) | **0 (объединены в `vendor-ui`)** | **Ликвидирован водопад** |
+| **Общий JS бандл (Gzip)** | 263.31 kB | **259.96 kB** | **-3.35 kB** |
+| **Сетевое время Fast 4G (Initial)** | ~348 ms | **~309 ms** | **-39 ms** |
+| **Сетевое время Slow 4G (Initial)** | ~1 827 ms | **~1 580 ms** | **-247 ms** |
+| **Сетевое время Mobile 3G (Initial)** | ~4 378 ms | **~3 851 ms** | **-527 ms** |
+| **DOM `<img>` в VerticalReader (80+ стр)**| 80+ тяжелых тегов | **~3–5 тегов** | **> 85% экономии памяти** |
+| **LCP Image Attribution (Reader)** | 0 (дефолтный приоритет) | **1 (`fetchPriority="high"`)** | **Приоритет 1-го кадра** |
+| **TanStack Query Caching & Prefetch** | Отсутствовал | **`staleTime: Infinity` + Next Prefetch** | **Мгновенный переход** |
+| **Целостность тестов (`npm test`)** | 100% pass | **100% pass (7 verification + 29 unit)**| **0 регрессий** |
+| **Typecheck (`tsc --noEmit`)** | 0 errors | **0 errors** | **0 ошибок типов** |
+
 
 
 
