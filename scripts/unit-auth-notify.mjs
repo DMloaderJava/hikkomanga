@@ -319,6 +319,24 @@ check(
   clsChallenge.errorKind
 );
 
+// ── 2d. maskArg / maskArgs: секреты не светятся в логе (зеркало setup-login-guard.mjs) ───────
+const testMaskArg = (a) => {
+  if (typeof a !== 'string') return String(a);
+  if (/^[A-Z][A-Z0-9_]*=/.test(a)) return a.replace(/=.*$/, '=***');
+  if (/^re_[A-Za-z0-9_-]{8,}$/.test(a)) return 're_***';
+  return a;
+};
+const testMaskArgs = (cmdArgs) => cmdArgs.map((a, i) => {
+  if (cmdArgs[i - 1] === '--password') return '***';
+  if (a.startsWith('--password=')) return '--password=***';
+  return testMaskArg(a);
+});
+check('maskArg: обычный аргумент не маскируется', testMaskArg('--project-ref') === '--project-ref');
+check('maskArg: KEY=value маскируется', testMaskArg('RESEND_API_KEY=re_123456789') === 'RESEND_API_KEY=***');
+check('maskArg: standalone re_ токен маскируется', testMaskArg('re_abc123def456789') === 're_***');
+check('maskArgs: --password <val> маскируется', testMaskArgs(['link','--password','superSecret123'])[2] === '***');
+check('maskArgs: --password=secret маскируется', testMaskArgs(['link','--password=superSecret123'])[1] === '--password=***');
+
 // ── 3. ads CRUD + legacy active:undefined ───────────────────────────────────
 store.clear();
 // legacy row without active

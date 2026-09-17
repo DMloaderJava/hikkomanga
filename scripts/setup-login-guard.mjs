@@ -99,7 +99,11 @@ const maskArg = (a) => {
   if (/^re_[A-Za-z0-9_-]{8,}$/.test(a)) return 're_***';
   return a;
 };
-const maskArgs = (cmdArgs) => cmdArgs.map((a, i) => (cmdArgs[i - 1] === '--password' ? '***' : maskArg(a)));
+const maskArgs = (cmdArgs) => cmdArgs.map((a, i) => {
+  if (cmdArgs[i - 1] === '--password') return '***';
+  if (a.startsWith('--password=')) return '--password=***';
+  return maskArg(a);
+});
 
 const run = (cmd, cmdArgs, label, opts = {}) => {
   console.log(`\n→ ${label}`);

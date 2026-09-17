@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from './client';
+import { SUPABASE_URL } from '@/integrations/supabase/config';
 
 /** Почему не ушло письмо подтверждения — для точной подсказки владельцу в UI. */
 export type LoginNotifyErrorKind =
@@ -137,10 +138,20 @@ export function classifyEdgeFailure(
 
   // 4) Сеть: FunctionsFetchError без context («Failed to send a request…») — не путать с 404.
   if (!detail && /failed to send a request to the edge function/.test(msg)) {
+    const origin = (() => {
+      try {
+        return SUPABASE_URL ? new URL(SUPABASE_URL).origin : null;
+      } catch {
+        return null;
+      }
+    })();
+    const curlUrl = origin
+      ? `${origin}/functions/v1/login-notify`
+      : 'https://<ref>.supabase.co/functions/v1/login-notify';
     return {
       error:
         'Не удалось связаться с Edge Function (сеть/DNS/CORS). ' +
-        'Проверьте: curl -s -o /dev/null -w \"%{http_code}\\n\" -X POST https://<ref>.supabase.co/functions/v1/login-notify — 401 жива, 404 не задеплоена, 000 сеть/блокировка (см. SETUP_SUPABASE.md раздел 6)',
+        `Проверьте: curl -s -o /dev/null -w "%{http_code}\\n" -X POST ${curlUrl} — 401 жива, 404 не задеплоена, 000 сеть/блокировка (см. SETUP_SUPABASE.md раздел 6)`,
       errorKind: 'network',
     };
   }
