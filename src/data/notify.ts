@@ -1,5 +1,19 @@
 import { supabase, isSupabaseConfigured } from './client';
 
+/** Почему не ушло письмо подтверждения — для точной подсказки владельцу в UI. */
+export type LoginNotifyErrorKind =
+  /** Прод-сборка без VITE_SUPABASE_* → сайт в демо-режиме, письмо слать нечем. */
+  | 'demo-build'
+  /** Edge Function login-notify не задеплоена (404 / "function not found"). */
+  | 'fn-not-deployed'
+  /** OWNER_NOTIFY_EMAIL / RESEND_API_KEY не заданы в секретах Supabase. */
+  | 'secrets-missing'
+  /** Resend отклонил запрос (ключ, домен отправителя, лимиты). */
+  | 'resend'
+  /** Сеть/браузер не достучались до функции. */
+  | 'network'
+  | 'other';
+
 export interface LoginNotifyResult {
   ok: boolean;
   emulated?: boolean;
@@ -14,6 +28,7 @@ export interface LoginNotifyResult {
     denyUrl?: string;
   };
   error?: string;
+  errorKind?: LoginNotifyErrorKind;
 }
 
 export type LoginChallengeStatus =
@@ -28,18 +43,115 @@ export type LoginChallengeStatus =
   | string;
 
 /**
+ * Достаёт статус и тело ошибки из FunctionsHttpError (supabase-js кладёт
+ * оригинальный Response в `error.context`). Тело нашей функции —
+ * `{ ok:false, error: '...' }`;relay/404 могут отдавать просто текст.
+ */
+async function extractEdgeErrorDetail(
+  error: unknown
+): Promise<{ status?: number; detail?: string }> {
+  try {
+    const ctx = (error as { context?: Response })?.context;
+    if (ctx && typeof ctx.status === 'number') {
+      const text = await ctx.text().catch(() => '');
+      if (text) {
+        try {
+          const j = JSON.parse(text) as { error?: unknown; message?: unknown };
+          if (j?.error != null) return { status: ctx.status, detail: String(j.error) };
+          if (j?.message != null) return { status: ctx.status, detail: String(j.message) };
+        } catch {
+          return { status: ctx.status, detail: text.slice(0, 200) };
+        }
+      }
+      return { status: ctx.status };
+    }
+  } catch {
+    // ignore
+  }
+  return {};
+}
+
+/**
+ * Классифицирует сбой `login-notify` в понятную строку + вид причины,
+ * чтобы владелец сразу видел, ЧТО именно настраивать (деплой/секреты/Resend).
+ * Экспортируется для unit-тестов.
+ */
+export function classifyEdgeFailure(
+  error: unknown,
+  status?: number,
+  detail?: string
+): { error: string; errorKind: LoginNotifyErrorKind } {
+  const d = (detail || '').toLowerCase();
+  const msg = ((error as Error)?.message || '').toLowerCase();
+
+  // 1) Функция не задеплоена: 404 от edge-рантайма или «не удалось отправить запрос».
+  if (
+    status === 404 ||
+    /function not found|not deployed|could not be found/.test(d) ||
+    (!detail && /failed to send a request to the edge function/.test(msg))
+  ) {
+    return {
+      error:
+        'Edge Function login-notify не задеплоена в этом проекте. ' +
+        'Владелец: `supabase functions deploy login-notify --project-ref <ref>` ' +
+        '(и `login-confirm`), см. SETUP_SUPABASE.md раздел 6 или ' +
+        '`node scripts/setup-login-guard.mjs --help`',
+      errorKind: 'fn-not-deployed',
+    };
+  }
+
+  // 2) Секреты не заданы — функция сама возвращает точные 500/503.
+  if (d.includes('owner_notify_email')) {
+    return {
+      error:
+        'в секретах Supabase не задан OWNER_NOTIFY_EMAIL. Владелец: ' +
+        '`supabase secrets set OWNER_NOTIFY_EMAIL=you@domain.tld --project-ref <ref>`',
+      errorKind: 'secrets-missing',
+    };
+  }
+  if (d.includes('resend_api_key')) {
+    return {
+      error:
+        'в секретах Supabase не задан RESEND_API_KEY. Владелец: ' +
+        '`supabase secrets set RESEND_API_KEY=re_xxx --project-ref <ref>` ' +
+        '(ключ: resend.com → API Keys)',
+      errorKind: 'secrets-missing',
+    };
+  }
+
+  // 3) Resend отклонил письмо (502 от функции с текстом Resend).
+  if (
+    status === 502 ||
+    /resend|api key|unverified|not allowed to send|sender|domain/.test(d)
+  ) {
+    return {
+      error:
+        `Resend не принял письмо${detail ? `: ${detail}` : ''}. Владелец: проверьте ` +
+        'RESEND_API_KEY; отправитель по умолчанию onboarding@resend.dev доставляет ' +
+        'почту ТОЛЬКО на адрес аккаунта Resend — для другого адреса подтвердите ' +
+        'домен в Resend и задайте секрет OWNER_NOTIFY_FROM',
+      errorKind: 'resend',
+    };
+  }
+
+  // 4) Всё остальное (ошибка challenge, auth, сеть) — как есть.
+  const text = detail || (error as Error)?.message || 'не удалось отправить письмо подтверждения';
+  return { error: text, errorKind: /fetch|network|econn|cors/i.test(text) ? 'network' : 'other' };
+}
+
+/**
  * Запускает обязательное подтверждение входа (Login Guard).
  *
  * Транспорт:
  *  1. Supabase Edge Function `login-notify` — создаёт challenge + Resend;
  *  2. dev-мидлварь Vite `/api/login-notify` (только `npm run dev`).
  *
- * Если письмо/challenge не удалось создать — `ok: false`.
+ * Если письмо/challenge не удалось создать — `ok: false` + `errorKind`.
  * Вызывающий код ОБЯЗАН откатить сессию (signOut): без подтверждения входа нет.
  */
 export async function notifyAdminLogin(adminEmail: string): Promise<LoginNotifyResult> {
   if (typeof window === 'undefined') {
-    return { ok: false, error: 'notify доступен только в браузере' };
+    return { ok: false, error: 'notify доступен только в браузере', errorKind: 'other' };
   }
 
   const payload = {
@@ -59,26 +171,32 @@ export async function notifyAdminLogin(adminEmail: string): Promise<LoginNotifyR
         rememberLoginChallenge(result);
         return result;
       }
-      // функция не задеплоена / секреты не заданы — пробуем dev-транспорт
-      if (error && !import.meta.env.DEV) {
-        return {
-          ok: false,
-          error: error.message || 'не удалось отправить письмо подтверждения',
-        };
+      // Прод: разбираем, ЧТО именно сломано (деплой / секреты / Resend).
+      // DEV при ошибке функции проваливается в эмуляцию ниже.
+      if (!import.meta.env.DEV) {
+        const { status, detail } = await extractEdgeErrorDetail(error);
+        const { error: message, errorKind } = classifyEdgeFailure(error, status, detail);
+        return { ok: false, error: message, errorKind };
       }
     } catch (e: any) {
       if (!import.meta.env.DEV) {
-        return { ok: false, error: e?.message || 'не удалось отправить письмо подтверждения' };
+        const { error: message, errorKind } = classifyEdgeFailure(e);
+        return { ok: false, error: message, errorKind };
       }
     }
   }
 
   // Dev-мидлварь есть только в `npm run dev`. В проде роут отсутствует:
-  // SPA-фоллбэк вернул бы index.html с 200 — бессмысленный запрос.
+  // сюда попадают либо демо-сборка (нет VITE_SUPABASE_*), либо сбой выше.
   if (!import.meta.env.DEV) {
     return {
       ok: false,
-      error: 'сервис подтверждения входа недоступен (нет login-notify)',
+      error:
+        'в этой сборке вообще не настроен Supabase (нет VITE_SUPABASE_URL и ключа) — ' +
+        'сайт работает в демо-режиме, письмо подтверждения отправить нечем. ' +
+        'Владелец: задайте переменные сборки, затем настройте секреты и задеплойте ' +
+        'функции (SETUP_SUPABASE.md раздел 6, `node scripts/setup-login-guard.mjs --help`)',
+      errorKind: 'demo-build',
     };
   }
 

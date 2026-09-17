@@ -181,6 +181,17 @@ supabase functions deploy login-notify --project-ref <project-ref>
 supabase functions deploy login-confirm --project-ref <project-ref>
 ```
 
+Всё то же одной командой (секреты → деплой → проверка, секреты в лог не
+печатаются):
+
+```bash
+node scripts/setup-login-guard.mjs \
+  --project-ref <project-ref> \
+  --owner-email you@yourdomain.com \
+  --resend-key re_xxxxxxxxxxxx
+# --from "Name <noreply@yourdomain.tld>" — если домен подтверждён в Resend
+```
+
 **Порядок критичен для 08:** между `db push` и `functions deploy login-notify`
 не открывайте `/admin/login` — 5-arg/6-arg mismatch даёт «нет challenge» или
 «function does not exist» на ≤1 мин. Делайте 2→3 подряд.
@@ -236,6 +247,32 @@ CSP на Vercel (`vercel.json`): `img-src` — `'self' data: blob: https://*.sup
 (внешние CDN для баннеров не пройдут — только Supabase Storage). `script-src 'self'` (prod-сборка Vite без
 inline-скриптов). `style-src` оставляет `'unsafe-inline'` — Tailwind/runtime
 иногда инжектит style-атрибуты.
+
+### Диагностика: что означает ошибка входа
+
+Форма `/admin/login` показывает **вид причины** (`errorKind`), поэтому по тексту
+ошибки сразу видно, что чинить:
+
+| Текст в скобках ошибки | Причина | Как чинить владельцу |
+| --- | --- | --- |
+| `в этой сборке вообще не настроен Supabase …` (`demo-build`) | Прод собран без `VITE_SUPABASE_URL` / ключа — сайт в демо-режиме, письмо слать нечем | Задать переменные сборки (Vercel/Lovable → Env), пересобрать, затем секреты + деплой функций |
+| `не задеплоена` / `Failed to send a request to the Edge Function` (`fn-not-deployed`) | `login-notify` нет в проекте | `supabase functions deploy login-notify --project-ref <ref>` (+ `login-confirm`) |
+| `не задан OWNER_NOTIFY_EMAIL` / `не задан RESEND_API_KEY` (`secrets-missing`) | Функция задеплоена, но секретов нет | `supabase secrets set OWNER_NOTIFY_EMAIL=… RESEND_API_KEY=… --project-ref <ref>` |
+| `Resend не принял письмо: …` (`resend`) | Ключ/домен отправителя не прошли в Resend | Проверить `RESEND_API_KEY`; `onboarding@resend.dev` шлёт **только на адрес аккаунта** — иначе подтвердить домен и задать `OWNER_NOTIFY_FROM` |
+| сетевая ошибка (`network`) | Браузер не достучался до `<ref>.supabase.co` | Повторить; проверить блокировщики/файрвол |
+
+Быстрая самопроверка без браузера (функция жива ⇒ не 404):
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  https://<project-ref>.supabase.co/functions/v1/login-notify
+# 401 = задеплоена (нет сессии — так и должно быть без Authorization)
+# 404 = функция не задеплоена
+```
+
+Письма от `onboarding@resend.dev` часто падают в спам; если письмо не
+приходит вовсе — почти наверняка `OWNER_NOTIFY_EMAIL` не совпадает с адресом
+аккаунта, в котором создан `RESEND_API_KEY` (см. таблицу выше, строка `resend`).
 
 ### Тесты
 

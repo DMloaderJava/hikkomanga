@@ -22,6 +22,36 @@ export const Route = createFileRoute('/admin/login')({
 
 type Phase = 'form' | 'waiting' | 'denied' | 'expired' | 'service_error';
 
+/** Подсказка владельцу по виду сбоя письма (см. LoginNotifyErrorKind). */
+const OWNER_HINTS: Record<string, string> = {
+  'demo-build':
+    '1) Задайте переменные сборки VITE_SUPABASE_URL и VITE_SUPABASE_ANON_KEY (или ' +
+    'VITE_SUPABASE_PUBLISHABLE_KEY) и пересоберите сайт. ' +
+    '2) Затем секреты + деплой функций: `node scripts/setup-login-guard.mjs --help` ' +
+    '(SETUP_SUPABASE.md, раздел 6).',
+  'fn-not-deployed':
+    'Задеплойте функции (нужны обе):\n' +
+    '  supabase functions deploy login-notify --project-ref <ref>\n' +
+    '  supabase functions deploy login-confirm --project-ref <ref>\n' +
+    'или выполните `node scripts/setup-login-guard.mjs ...` (SETUP_SUPABASE.md, раздел 6).',
+  'secrets-missing':
+    'Задайте секреты проекта:\n' +
+    '  supabase secrets set OWNER_NOTIFY_EMAIL=you@domain.tld RESEND_API_KEY=re_xxx --project-ref <ref>\n' +
+    'Ключ Resend: resend.com → API Keys. Или `node scripts/setup-login-guard.mjs ...`',
+  resend:
+    'Проверьте ключ и отправителя в секретах. Важно: отправитель по умолчанию ' +
+    'onboarding@resend.dev доставляет письма ТОЛЬКО на адрес аккаунта Resend. ' +
+    'Для другого OWNER_NOTIFY_EMAIL подтвердите домен в Resend и задайте секрет ' +
+    'OWNER_NOTIFY_FROM.',
+  network:
+    'Похоже на сетевой сбой (нет связи с Supabase, блокировщик/файрвол). ' +
+    'Попробуйте войти ещё раз с другого соединения.',
+  other:
+    'Нужно настроить сервис подтверждения: секреты OWNER_NOTIFY_EMAIL + ' +
+    'RESEND_API_KEY и деплой Edge Functions login-notify/login-confirm ' +
+    '(SETUP_SUPABASE.md, раздел 6). Без письма подтверждения вход в админку закрыт.',
+};
+
 function AdminLoginPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -126,17 +156,19 @@ function AdminLoginPage() {
     try {
       const result = await auth.signIn(email, password);
       if (result.error) {
-        // Login Guard / Resend не настроен — подсказка для админа (не владельца).
+        // Login Guard / Resend не настроен — подсказка для админа (не владельца)
+        // с точным чек-листом для владельца по виду сбоя.
         const raw = result.error.message || '';
-        const isNotifyFail =
-          /письмо подтверждения|login-notify|RESEND|OWNER_NOTIFY|сервис подтверждения/i.test(
-            raw
-          );
-        setError(
-          isNotifyFail
-            ? `${raw}\n\nОбратитесь к владельцу сайта: нужно настроить Resend и Edge Function login-notify (OWNER_NOTIFY_EMAIL + RESEND_API_KEY в Supabase Secrets). Без письма подтверждения вход в админку закрыт.`
-            : raw
-        );
+        const kind = result.notify?.errorKind;
+        let hint = kind ? OWNER_HINTS[kind] : undefined;
+        if (!hint) {
+          const isNotifyFail =
+            /письмо подтверждения|login-notify|RESEND|OWNER_NOTIFY|сервис подтверждения/i.test(
+              raw
+            );
+          if (isNotifyFail) hint = OWNER_HINTS.other;
+        }
+        setError(hint ? `${raw}\n\nОбратитесь к владельцу сайта. ${hint}` : raw);
         setPhase('form');
       } else if (result.pendingConfirmation) {
         setNotify(result.notify ?? null);

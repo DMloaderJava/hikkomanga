@@ -286,6 +286,39 @@ const st = await (
 ).json();
 check('dev status approved', st.status === 'approved', st.status);
 
+// ── 2c. classifyEdgeFailure: точная причина сбоя письма для владельца ───────
+const cls404 = notify.classifyEdgeFailure(new Error('Edge Function returned an error'), 404);
+check('classify 404 → fn-not-deployed', cls404.errorKind === 'fn-not-deployed', cls404.errorKind);
+
+const clsNoFn = notify.classifyEdgeFailure(
+  new Error('Failed to send a request to the Edge Function')
+);
+check(
+  'classify «failed to send a request» → fn-not-deployed',
+  clsNoFn.errorKind === 'fn-not-deployed',
+  clsNoFn.errorKind
+);
+
+const clsOwner = notify.classifyEdgeFailure(null, 500, 'OWNER_NOTIFY_EMAIL secret is not set');
+check('classify OWNER_NOTIFY_EMAIL → secrets-missing', clsOwner.errorKind === 'secrets-missing');
+
+const clsKey = notify.classifyEdgeFailure(null, 503, 'RESEND_API_KEY secret is not set');
+check('classify RESEND_API_KEY → secrets-missing', clsKey.errorKind === 'secrets-missing');
+
+const clsResend = notify.classifyEdgeFailure(
+  null,
+  502,
+  'Could not verify the provided API key'
+);
+check('classify 502 → resend', clsResend.errorKind === 'resend', clsResend.errorKind);
+
+const clsChallenge = notify.classifyEdgeFailure(null, 500, 'не удалось создать challenge');
+check(
+  'classify challenge error → other (не resend)',
+  clsChallenge.errorKind === 'other',
+  clsChallenge.errorKind
+);
+
 // ── 3. ads CRUD + legacy active:undefined ───────────────────────────────────
 store.clear();
 // legacy row without active
