@@ -1,4 +1,5 @@
 import { supabase, isSupabaseConfigured } from './client';
+import { SUPABASE_URL } from '@/integrations/supabase/config';
 
 /** Почему не ушло письмо подтверждения — для точной подсказки владельцу в UI. */
 export type LoginNotifyErrorKind =
@@ -84,11 +85,13 @@ export function classifyEdgeFailure(
   const d = (detail || '').toLowerCase();
   const msg = ((error as Error)?.message || '').toLowerCase();
 
-  // 1) Функция не задеплоена: 404 от edge-рантайма или «не удалось отправить запрос».
+  // 1) Функция не задеплоена: явный 404 от edge-рантайма или текст "not found" в ответе.
+  //    ВАЖНО: голый FunctionsFetchError ("Failed to send a request to the Edge Function")
+  //    БЕЗ context/status НЕ означает "не задеплоена" — он приходит при DNS/CORS/сетевом
+  //    сбое. Настоящий 404 всегда идёт как FunctionsHttpError с context.status === 404.
   if (
     status === 404 ||
-    /function not found|not deployed|could not be found/.test(d) ||
-    (!detail && /failed to send a request to the edge function/.test(msg))
+    /function not found|not deployed|could not be found/.test(d)
   ) {
     return {
       error:
@@ -97,6 +100,23 @@ export function classifyEdgeFailure(
         '(и `login-confirm`), см. SETUP_SUPABASE.md раздел 6 или ' +
         '`node scripts/setup-login-guard.mjs --help`',
       errorKind: 'fn-not-deployed',
+    };
+  }
+
+  // 1b) FunctionsFetchError без HTTP-ответа — сеть/блокировка/CORS.
+  //     (Сюда попадаем когда detail пуст, а сообщение говорит что запрос не ушёл.)
+  if (!status && !detail && /failed to send a request|fetch|network|econn/i.test(msg)) {
+    // Подставляем реальный хост из SUPABASE_URL, чтобы пользователь видел,
+    // куда именно не достучаться; fallback — плейсхолдер на случай если
+    // SUPABASE_URL вообще не задан (demo-build отрабатывает раньше, но страхуемся).
+    const host = (SUPABASE_URL || 'https://<ref>.supabase.co').replace(/^https?:\/\//, '').replace(/\/$/, '');
+    return {
+      error:
+        `Не удалось достучаться до Edge Function login-notify (${host}) — сетевая ошибка, ` +
+        'блокировка запроса или CORS. Проверьте соединение; быстрая самопроверка:\n' +
+        `  curl -s -o /dev/null -w '%{http_code}\\n' -X POST https://${host}/functions/v1/login-notify\n` +
+        '  401 → жива; 404 → не задеплоена; 000 → сеть/блокировка',
+      errorKind: 'network',
     };
   }
 

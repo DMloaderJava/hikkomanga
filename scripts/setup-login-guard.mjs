@@ -14,9 +14,21 @@
  * токен в SUPABASE_ACCESS_TOKEN (CI). Секреты в лог не печатаются.
  *
  * Что делает:
- *   1. `supabase secrets set RESEND_API_KEY=... OWNER_NOTIFY_EMAIL=... [--from → OWNER_NOTIFY_FROM]`
- *   2. `supabase functions deploy login-notify` + `login-confirm`
- *   3. Проверяет деплой: анонимный запрос к функциям
+ *   1. `supabase secrets set --env-file <tmp>` — секреты передаются через
+ *      временный файл с режимом 0600; они НЕ попадают ни в лог, ни в argv/ps
+ *      процесса. Файл удаляется в собственном `try/finally` сразу после
+ *      `secrets set` (не живёт на диске во время deploy/probe). Если команда
+ *      падает с ошибкой/ненулевым кодом/сигналом (ENOENT, Ctrl+C) — `run()`
+ *      вызывает `fail()`, а тот — `cleanupSecretsFile()` до exit. Хендлеры
+ *      SIGINT/SIGTERM/SIGHUP дублируют очистку на случай прерывания МЕЖДУ
+ *      spawnSync-вызовами (внутри spawnSync event loop блокирован и туда не
+ *      попадает — там отрабатывает ветка r.signal в run()).
+ *   2. При --with-db: `supabase link` (с SUPABASE_DB_PASSWORD, если задан) +
+ *      `supabase db push`.
+ *   3. Проверяет наличие supabase/functions/{login-notify,login-confirm}/index.ts
+ *      в репозитории до деплоя.
+ *   4. `supabase functions deploy login-notify` + `login-confirm`
+ *   5. Проверяет деплой: анонимный запрос к функциям
  *      (ожидаем 401 / «нет токена», но НЕ 404).
  *
  * ВАЖНО про Resend: отправитель по умолчанию — onboarding@resend.dev, он
@@ -25,6 +37,9 @@
  * --from (→ секрет OWNER_NOTIFY_FROM).
  */
 import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, writeFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import process from 'node:process';
 
 // ── args ────────────────────────────────────────────────────────────────────
@@ -76,10 +91,41 @@ const ownerEmail = (args.ownerEmail || process.env.OWNER_NOTIFY_EMAIL || '').tri
 const resendKey = (args.resendKey || process.env.RESEND_API_KEY || '').trim();
 const projectRef = args.projectRef.trim();
 
+// Путь к временному .env.secrets и его родительской директории (mkdtempSync) —
+// чтобы fail() / signal-handler могли их удалить до process.exit().
+// В Node process.exit() НЕ выполняет блоки finally, поэтому очистка в fail() —
+// единственная надёжная точка.
+let secretsTmpFile;
+let secretsTmpDir;
+
+/** Удалить временный env-file и его директорию, если они существуют. Безопасно звать много раз. */
+function cleanupSecretsFile() {
+  if (secretsTmpFile) {
+    try { rmSync(secretsTmpFile, { force: true }); } catch { /* ignore */ }
+    secretsTmpFile = undefined;
+  }
+  if (secretsTmpDir) {
+    try { rmSync(secretsTmpDir, { force: true, recursive: true }); } catch { /* ignore */ }
+    secretsTmpDir = undefined;
+  }
+}
+
 const fail = (msg) => {
+  cleanupSecretsFile();
   console.error(`\n✗ ${msg}`);
   process.exit(1);
 };
+
+// Сигналы МЕЖДУ spawnSync-вызовами (пока event loop жив) — чистим temp и выходим
+// стандартным 128+signo. Внутри spawnSync event loop блокирован, там сигнал
+// принимает child и прилетает к нам как r.signal — run() обрабатывает это сам.
+for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.on(sig, () => {
+    cleanupSecretsFile();
+    // стандартный выход по сигналу: 128 + signal number
+    process.exit(128 + (sig === 'SIGHUP' ? 1 : sig === 'SIGINT' ? 2 : 15));
+  });
+}
 
 if (!projectRef) fail('Нужен --project-ref (Supabase → Project Settings → General → Reference ID)');
 if (!/^[a-z0-9-]{10,30}$/i.test(projectRef)) fail(`Похоже, ${projectRef} не похож на project ref`);
@@ -88,10 +134,27 @@ if (/@example\.(com|org|net)$/i.test(ownerEmail)) {
 }
 
 const mask = (s) => (s.length > 8 ? `${s.slice(0, 7)}…${s.slice(-2)}` : '***');
+
+/**
+ * Маскирует значения в аргументах вида KEY=value при выводе в лог.
+ * Значение заменяется на ***; имя переменной остаётся.
+ */
+const maskArg = (a) => (/^[A-Z][A-Z0-9_]*=/.test(a) ? a.replace(/=.*$/, '=***') : a);
+
 const run = (cmd, cmdArgs, label, opts = {}) => {
   console.log(`\n→ ${label}`);
-  console.log(`  $ ${cmd} ${cmdArgs.join(' ')}`);
+  console.log(`  $ ${cmd} ${cmdArgs.map(maskArg).join(' ')}`);
   const r = spawnSync(cmd, cmdArgs, { stdio: 'inherit', env: process.env, ...opts });
+  // spawnSync НЕ бросает при ошибке запуска (ENOENT) / сигнале — кладёт в r.error / r.signal,
+  // а r.status при этом === null. Проверяем по порядку, чтобы fail() показал внятную причину
+  // и чтобы cleanup отработал до process.exit.
+  if (r.error) fail(`${label} — ${r.error.message}`);
+  if (r.signal) {
+    // Передаём сигнал дальше стандартным exit-кодом 128 + signo, но сначала чистим temp.
+    cleanupSecretsFile();
+    const signo = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGKILL: 9, SIGTERM: 15 }[r.signal] ?? 0;
+    process.exit(128 + signo);
+  }
   if (r.status !== 0) fail(`${label} — команда завершилась с кодом ${r.status}`);
 };
 
@@ -107,6 +170,10 @@ try {
 }
 
 // ── 1. Секреты (до деплоя: функция без секретов = вход закрыт) ──────────────
+// Используем --env-file <tmp>: RESEND_API_KEY не попадает ни в лог (maskArg),
+// ни в argv/ps процесса (только имя файла). CLI читает ключ напрямую из файла.
+// Файл создаётся с mode 0600 и удаляется сразу после `secrets set`, не живёт
+// через последующие шаги (link/db push/deploy/probe).
 if (!skipSecrets) {
   if (!ownerEmail) {
     fail('Нужен --owner-email (или переменная OWNER_NOTIFY_EMAIL) — куда слать письма');
@@ -120,21 +187,63 @@ if (!skipSecrets) {
   if (!/^re_[A-Za-z0-9_-]{8,}$/.test(resendKey)) {
     fail('RESEND_API_KEY должен начинаться с re_… (resend.com → API Keys)');
   }
-  const secrets = [`RESEND_API_KEY=${resendKey}`, `OWNER_NOTIFY_EMAIL=${ownerEmail}`];
-  if (args.from) secrets.push(`OWNER_NOTIFY_FROM=${args.from}`);
+
+  const envLines = [
+    `RESEND_API_KEY=${resendKey}`,
+    `OWNER_NOTIFY_EMAIL=${ownerEmail}`,
+  ];
+  if (args.from) envLines.push(`OWNER_NOTIFY_FROM=${args.from}`);
+
+  // Создаём во временной поддиректории с chmod 0700 (mkdtempSync), файл — 0600.
+  secretsTmpDir = mkdtempSync(join(tmpdir(), 'supa-secrets-'));
+  secretsTmpFile = join(secretsTmpDir, '.env.secrets');
+  writeFileSync(secretsTmpFile, envLines.join('\n') + '\n', { mode: 0o600 });
+
   console.log(
     `\n→ Секреты: RESEND_API_KEY=${mask(resendKey)}, OWNER_NOTIFY_EMAIL=${ownerEmail}` +
-      (args.from ? `, OWNER_NOTIFY_FROM="${args.from}"` : '')
+      (args.from ? `, OWNER_NOTIFY_FROM="${args.from}"` : '') +
+      `\n  (через --env-file ${secretsTmpFile} — ключ не в argv/ps; файл удаляется сразу после secrets set)`
   );
-  run('supabase', ['secrets', 'set', ...secrets, '--project-ref', projectRef], 'secrets set');
+  try {
+    run(
+      'supabase',
+      ['secrets', 'set', '--env-file', secretsTmpFile, '--project-ref', projectRef],
+      'secrets set'
+    );
+  } finally {
+    // Удаляем и файл, и временную директорию сразу — до вызова deploy/probe.
+    // (При сигнале/ошибке run() вызывает fail() → cleanupSecretsFile() до exit,
+    //  но на happy-path finally отработает раньше.)
+    cleanupSecretsFile();
+  }
 } else {
   console.log('\n→ Пропускаю секреты (--skip-secrets)');
 }
 
 // ── 1b. Миграции (по флагу --with-db) ───────────────────────────────────────
 if (withDb) {
-  run('supabase', ['link', '--project-ref', projectRef], 'supabase link');
+  run(
+    'supabase',
+    [
+      'link',
+      '--project-ref',
+      projectRef,
+      ...(process.env.SUPABASE_DB_PASSWORD
+        ? ['--password', process.env.SUPABASE_DB_PASSWORD]
+        : []),
+    ],
+    'supabase link'
+  );
   run('supabase', ['db', 'push'], 'db push (миграции из supabase/migrations)');
+}
+
+// ── 1c. Проверка, что функции есть в репо — до деплоя ───────────────────────
+if (!skipDeploy) {
+  for (const n of ['login-notify', 'login-confirm']) {
+    if (!existsSync(`supabase/functions/${n}/index.ts`)) {
+      fail(`Не найден supabase/functions/${n}/index.ts — деплоить нечего`);
+    }
+  }
 }
 
 // ── 2. Деплой функций ───────────────────────────────────────────────────────
