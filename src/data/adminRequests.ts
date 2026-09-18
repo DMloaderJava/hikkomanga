@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured } from './client';
+import { getSupabase, isSupabaseConfigured } from './client';
 import type { AdminRequest, RequestType } from './types';
 import { RateLimitError } from './types';
 
@@ -50,6 +50,7 @@ export const adminRequests = {
       return row;
     }
 
+    const supabase = await getSupabase();
     // requester_id обязателен для admin-заявок (RLS); для ad_request — опционален
     let requesterId: string | null = null;
     try {
@@ -97,6 +98,7 @@ export const adminRequests = {
       return loadDemo().filter((r) => r.status === 'pending');
     }
 
+    const supabase = await getSupabase();
     const { data, error } = await supabase
       .from('admin_requests')
       .select('*')
@@ -115,6 +117,7 @@ export const adminRequests = {
       return list.slice(0, limit);
     }
 
+    const supabase = await getSupabase();
     // Фильтр status в SQL — иначе при 50+ resolved admin не увидит свои pending.
     let q = supabase
       .from('admin_requests')
@@ -164,6 +167,7 @@ export const adminRequests = {
       return;
     }
 
+    const supabase = await getSupabase();
     let resolvedBy: string | null = null;
     try {
       const { data } = await supabase.auth.getUser();

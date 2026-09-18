@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured } from './client';
+import { getSupabase, isSupabaseConfigured } from './client';
 import { compressToWebP } from '@/lib/imageCompress';
 
 function fileToDataUrl(file: Blob): Promise<string> {
@@ -25,6 +25,7 @@ export const storage = {
 
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         // 1. Upload original
         await supabase.storage.from('manga-originals').upload(originalPath, file, { upsert: true });
 
@@ -67,6 +68,7 @@ export const storage = {
 
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { error } = await supabase.storage.from('manga').upload(filename, compressedBlob, {
           cacheControl: '31536000',
           upsert: true,
@@ -88,6 +90,7 @@ export const storage = {
     const path = `${chapterId}/${Date.now()}-voiceover.wav`;
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { error } = await supabase.storage.from('voiceovers').upload(path, audioBlob, {
           contentType: 'audio/wav',
           upsert: true,
@@ -107,6 +110,7 @@ export const storage = {
   async deletePage(imageUrl: string | null, originalPath: string | null) {
     if (!isSupabaseConfigured) return;
     try {
+      const supabase = await getSupabase();
       if (originalPath && !originalPath.startsWith('data:')) {
         await supabase.storage.from('manga-originals').remove([originalPath]);
       }
@@ -124,6 +128,7 @@ export const storage = {
   async deleteCover(coverUrl: string | null) {
     if (!isSupabaseConfigured || !coverUrl || coverUrl.startsWith('data:')) return;
     try {
+      const supabase = await getSupabase();
       const urlParts = coverUrl.split('/manga/');
       if (urlParts.length > 1) {
         await supabase.storage.from('manga').remove([urlParts[1]]);
@@ -136,6 +141,7 @@ export const storage = {
   async deleteVoiceover(audioUrl: string | null) {
     if (!isSupabaseConfigured || !audioUrl || audioUrl.startsWith('data:')) return;
     try {
+      const supabase = await getSupabase();
       const urlParts = audioUrl.split('/voiceovers/');
       if (urlParts.length > 1) {
         await supabase.storage.from('voiceovers').remove([urlParts[1]]);

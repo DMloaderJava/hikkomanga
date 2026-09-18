@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured } from './client';
+import { getSupabase, isSupabaseConfigured } from './client';
 import { storage } from './storage';
 import type { DialogueLine, ChapterVoiceover } from './types';
 export type { ChapterVoiceover };
@@ -28,6 +28,7 @@ export const voiceoverApi = {
   async getByChapter(chapterId: string): Promise<ChapterVoiceover | null> {
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { data, error } = await supabase
           .from('chapter_voiceovers')
           .select('*')
@@ -60,6 +61,7 @@ export const voiceoverApi = {
     };
 
     if (isSupabaseConfigured) {
+      const supabase = await getSupabase();
       const { data, error } = await supabase
         .from('chapter_voiceovers')
         .upsert(record, { onConflict: 'chapter_id' })
@@ -94,6 +96,7 @@ export const voiceoverApi = {
     }
 
     if (isSupabaseConfigured) {
+      const supabase = await getSupabase();
       const { error } = await supabase
         .from('chapter_voiceovers')
         .delete()

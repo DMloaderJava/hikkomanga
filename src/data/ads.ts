@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured } from './client';
+import { getSupabase, isSupabaseConfigured } from './client';
 import type { Ad } from './types';
 
 const DEMO_KEY = 'manga_ads';
@@ -57,6 +57,7 @@ export const adsApi = {
       return list[Math.floor(Math.random() * list.length)];
     }
 
+    const supabase = await getSupabase();
     const { data, error } = await supabase
       .from('ads')
       .select('*')
@@ -81,6 +82,7 @@ export const adsApi = {
       );
     }
 
+    const supabase = await getSupabase();
     const { data, error } = await supabase
       .from('ads')
       .select('*')
@@ -112,6 +114,7 @@ export const adsApi = {
       return row;
     }
 
+    const supabase = await getSupabase();
     const { data, error } = await supabase
       .from('ads')
       .insert({
@@ -187,6 +190,7 @@ export const adsApi = {
     }
     if (input.expires_at !== undefined) patch.expires_at = input.expires_at || null;
 
+    const supabase = await getSupabase();
     const { data, error } = await supabase
       .from('ads')
       .update(patch)
@@ -203,6 +207,7 @@ export const adsApi = {
       saveDemo(loadDemo().filter((a) => a.id !== id));
       return;
     }
+    const supabase = await getSupabase();
     const { error } = await supabase.from('ads').delete().eq('id', id);
     if (error) throw new Error(`Не удалось удалить баннер: ${error.message}`);
   },

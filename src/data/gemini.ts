@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured } from './client';
+import { getSupabase, isSupabaseConfigured } from './client';
 import type { DialogueLine } from './types';
 export type { DialogueLine };
 
@@ -84,6 +84,7 @@ export const gemini = {
     // 1. Primary: Try Supabase Edge Function invocation
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { data, error } = await supabase.functions.invoke('gemini-proxy/analyze', {
           body: { imageBase64, mimeType },
         });
@@ -128,6 +129,7 @@ export const gemini = {
     // 1. Primary: Try Supabase Edge Function invocation for Gemini TTS
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { data, error } = await supabase.functions.invoke('gemini-proxy/tts', {
           body: { lines, voiceMap },
         });

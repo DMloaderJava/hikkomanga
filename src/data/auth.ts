@@ -1,4 +1,4 @@
-import { supabase, isSupabaseConfigured } from './client';
+import { getSupabase, isSupabaseConfigured } from './client';
 import { mockStore } from './mockStore';
 import {
   notifyAdminLogin,
@@ -13,6 +13,32 @@ export type SignInResult = {
   pendingConfirmation?: boolean;
   notify?: LoginNotifyResult;
 };
+
+type AuthListener = (session: any) => void;
+const authListeners = new Set<AuthListener>();
+
+/**
+ * Оповещает всех подписчиков (включая useAuth в Header) об изменении
+ * состояния авторизации без необходимости перезагрузки страницы.
+ */
+export function notifyAuthChanged(session?: any) {
+  authListeners.forEach((listener) => {
+    try {
+      listener(session);
+    } catch {
+      // ignore
+    }
+  });
+  if (typeof window !== 'undefined') {
+    try {
+      window.dispatchEvent(
+        new CustomEvent('manga-auth-change', { detail: { session } })
+      );
+    } catch {
+      // ignore
+    }
+  }
+}
 
 /**
  * Демо-сессия для режима без Supabase. Реальных паролей в коде нет и не было:
@@ -64,6 +90,16 @@ async function requireLoginConfirmation(
 
 export const auth = {
   /**
+   * Подписка на локальные изменения auth-состояния (работает без загрузки Supabase SDK).
+   */
+  subscribe(callback: (session: any) => void): () => void {
+    authListeners.add(callback);
+    return () => {
+      authListeners.delete(callback);
+    };
+  },
+
+  /**
    * Вход по email/паролю. Даже при верном пароле сессия «висит», пока
    * владелец не подтвердит вход ссылкой из письма на OWNER_NOTIFY_EMAIL.
    * `pendingConfirmation: true` → UI показывает экран ожидания.
@@ -74,6 +110,7 @@ export const auth = {
     // 1. Supabase Auth — единственный настоящий путь
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { data, error } = await supabase.auth.signInWithPassword({
           email: cleanEmail,
           password,
@@ -93,6 +130,7 @@ export const auth = {
           }
 
           mockStore.setAdminSession(data.session);
+          notifyAuthChanged(data.session);
           const conf = await requireLoginConfirmation(cleanEmail);
           if (!conf.ok) {
             return {
@@ -134,6 +172,7 @@ export const auth = {
 
     const { mockUser, mockSession } = createMockSession(cleanEmail);
     mockStore.setAdminSession(mockSession);
+    notifyAuthChanged(mockSession);
     const conf = await requireLoginConfirmation(cleanEmail);
     if (!conf.ok) {
       return {
@@ -162,8 +201,10 @@ export const auth = {
         // ignore
       }
     }
+    notifyAuthChanged(null);
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         await supabase.auth.signOut();
       } catch {
         // Ignore
@@ -174,6 +215,7 @@ export const auth = {
   async getSession() {
     if (isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { data } = await supabase.auth.getSession();
         if (data?.session) {
           mockStore.setAdminSession(data.session);
@@ -189,6 +231,21 @@ export const auth = {
   async getUser() {
     const session = await this.getSession();
     return session?.user ?? null;
+  },
+
+  async onAuthStateChange(callback: (event: string, session: any) => void) {
+    if (isSupabaseConfigured) {
+      try {
+        const supabase = await getSupabase();
+        return supabase.auth.onAuthStateChange((event, newSession) => {
+          notifyAuthChanged(newSession);
+          callback(event, newSession);
+        });
+      } catch {
+        // Fallback
+      }
+    }
+    return { data: { subscription: { unsubscribe: () => {} } } };
   },
 
   /**
@@ -258,6 +315,7 @@ export const auth = {
     // 3. Строго через Supabase RPC, если настроен
     if (!roleOk && isUuid && isSupabaseConfigured) {
       try {
+        const supabase = await getSupabase();
         const { data, error } = await supabase.rpc('has_role', {
           uid: userId,
           role_to_check: role,

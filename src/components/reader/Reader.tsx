@@ -90,6 +90,8 @@ export function Reader({
             altPrefix={altPrefix}
             titleSlug={titleSlug}
             chapterNumber={chapter.number}
+            chapterTitleId={chapter.title_id}
+            nextChapterNumber={nextChapter?.number ?? null}
           />
         ) : (
           <PagedReader
@@ -97,6 +99,8 @@ export function Reader({
             altPrefix={altPrefix}
             titleSlug={titleSlug}
             chapterNumber={chapter.number}
+            chapterTitleId={chapter.title_id}
+            nextChapterNumber={nextChapter?.number ?? null}
             onChapterEnd={handleNextChapter}
           />
         )}

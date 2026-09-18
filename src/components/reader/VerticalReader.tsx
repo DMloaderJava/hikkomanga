@@ -1,16 +1,99 @@
-import { useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { Page } from '@/data/types';
+import { prefetchNextChapter } from '@/lib/queryClient';
 
 interface VerticalReaderProps {
   pages: Page[];
   altPrefix: string;
   titleSlug: string;
   chapterNumber: number;
+  chapterTitleId?: string;
+  nextChapterNumber?: number | null;
 }
 
-export function VerticalReader({ pages, altPrefix, titleSlug, chapterNumber }: VerticalReaderProps) {
+interface VerticalReaderPageProps {
+  page: Page;
+  index: number;
+  altPrefix: string;
+}
+
+function VerticalReaderPage({ page, index, altPrefix }: VerticalReaderPageProps) {
+  const [isVisible, setIsVisible] = useState(index === 0);
+  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
+  const itemRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const el = itemRef.current;
+    if (!el) return;
+
+    if (typeof IntersectionObserver === 'undefined') {
+      setIsVisible(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setIsVisible(entry.isIntersecting);
+      },
+      {
+        root: null,
+        rootMargin: '100% 0px', // ±100% viewport buffer (1 full screen ahead/behind)
+        threshold: 0,
+      }
+    );
+
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+
+  return (
+    <div
+      ref={itemRef}
+      className="w-full bg-neutral-900 overflow-hidden"
+      style={{
+        minHeight: measuredHeight ? `${measuredHeight}px` : undefined,
+        aspectRatio: measuredHeight ? undefined : '2 / 3',
+      }}
+    >
+      {isVisible ? (
+        <img
+          src={page.image_url}
+          alt={`${altPrefix}, страница ${index + 1}`}
+          fetchPriority={index === 0 ? 'high' : 'auto'}
+          decoding={index === 0 ? 'sync' : 'async'}
+          loading={index === 0 ? 'eager' : 'lazy'}
+          className="w-full h-auto select-none block bg-neutral-900"
+          draggable={false}
+          onLoad={(e) => {
+            const h = e.currentTarget.offsetHeight;
+            if (h > 0) {
+              setMeasuredHeight((prev) => (prev === h ? prev : h));
+            }
+          }}
+        />
+      ) : (
+        <div
+          className="w-full h-full flex items-center justify-center text-neutral-700 select-none bg-neutral-900/60"
+          style={{ height: measuredHeight ? `${measuredHeight}px` : undefined }}
+        >
+          <span className="text-xs text-neutral-600">Страница {index + 1}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function VerticalReader({
+  pages,
+  altPrefix,
+  titleSlug,
+  chapterNumber,
+  chapterTitleId,
+  nextChapterNumber,
+}: VerticalReaderProps) {
   const progressKey = `hikkomanga_progress_${titleSlug}`;
   const containerRef = useRef<HTMLDivElement>(null);
+  const prefetchedRef = useRef(false);
 
   // Restore scroll position or bookmark on load
   useEffect(() => {
@@ -27,10 +110,21 @@ export function VerticalReader({ pages, altPrefix, titleSlug, chapterNumber }: V
     }
   }, [chapterNumber, progressKey]);
 
-  // Save scroll position on scroll
+  // Save scroll position on scroll & prefetch next chapter on reaching lower part of page
   useEffect(() => {
     let timeout: any;
+    prefetchedRef.current = false;
+
     const handleScroll = () => {
+      // Prefetch next chapter when scrolled > 65% of the page
+      if (!prefetchedRef.current && chapterTitleId && nextChapterNumber != null) {
+        const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;
+        if (scrollHeight > 0 && window.scrollY / scrollHeight > 0.65) {
+          prefetchedRef.current = true;
+          void prefetchNextChapter(chapterTitleId, nextChapterNumber).catch(() => {});
+        }
+      }
+
       clearTimeout(timeout);
       timeout = setTimeout(() => {
         try {
@@ -51,7 +145,7 @@ export function VerticalReader({ pages, altPrefix, titleSlug, chapterNumber }: V
       clearTimeout(timeout);
       window.removeEventListener('scroll', handleScroll);
     };
-  }, [chapterNumber, progressKey]);
+  }, [chapterNumber, progressKey, chapterTitleId, nextChapterNumber]);
 
   if (pages.length === 0) {
     return (
@@ -64,13 +158,11 @@ export function VerticalReader({ pages, altPrefix, titleSlug, chapterNumber }: V
   return (
     <div ref={containerRef} className="mx-auto max-w-3xl flex flex-col items-center shadow-2xl">
       {pages.map((p, i) => (
-        <img
+        <VerticalReaderPage
           key={p.id}
-          src={p.image_url}
-          alt={`${altPrefix}, страница ${i + 1}`}
-          loading={i < 3 ? 'eager' : 'lazy'}
-          className="w-full h-auto select-none block bg-neutral-900"
-          draggable={false}
+          page={p}
+          index={i}
+          altPrefix={altPrefix}
         />
       ))}
     </div>

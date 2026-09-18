@@ -1,22 +1,14 @@
 import { useEffect } from 'react';
 import { createRootRoute, Outlet, useLocation, Link } from '@tanstack/react-router';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { Analytics } from '@vercel/analytics/react';
 import { Header } from '@/components/layout/Header';
 import { Footer } from '@/components/layout/Footer';
 import { Button } from '@/components/ui/button';
 import { AlertTriangle, Home } from 'lucide-react';
 import { setNoindex } from '@/lib/seo';
+import { queryClient } from '@/lib/queryClient';
 import '@/styles/globals.css';
-
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      staleTime: 1000 * 60 * 5, // 5 minutes
-      refetchOnWindowFocus: false,
-    },
-  },
-});
 
 export const Route = createRootRoute({
   component: RootComponent,

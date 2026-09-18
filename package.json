@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "analyze": "ANALYZE=true vite build",
     "build": "vite build && node scripts/generate-sitemap.mjs && node scripts/prerender.mjs && node scripts/check-verification.mjs --built",
     "build:spa": "vite build",
     "prerender": "node scripts/prerender.mjs",
@@ -54,6 +55,7 @@
     "autoprefixer": "^10.6.0",
     "json5": "^2.2.3",
     "postcss": "^8.5.28",
+    "rollup-plugin-visualizer": "^7.1.1",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
     "vite": "^8.3.0"
