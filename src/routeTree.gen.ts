@@ -23,6 +23,7 @@ import { Route as AdminLoginConfirmRouteImport } from './routes/admin.login.conf
 import { Route as AdminTitlesIndexRouteImport } from './routes/admin.titles.index'
 import { Route as AdminTitlesIdRouteImport } from './routes/admin.titles.$id'
 import { Route as AdminTitlesNewRouteImport } from './routes/admin.titles.new'
+import { Route as TitleSlugIndexRouteImport } from './routes/title.$slug.index'
 import { Route as AdminTitlesIdIndexRouteImport } from './routes/admin.titles.$id.index'
 import { Route as AdminTitlesIdChaptersRouteImport } from './routes/admin.titles.$id.chapters'
 import { Route as TitleSlugChapterNumberRouteImport } from './routes/title.$slug.chapter.$number'
@@ -98,6 +99,11 @@ const AdminTitlesNewRoute = AdminTitlesNewRouteImport.update({
   path: '/new',
   getParentRoute: () => AdminTitlesRoute,
 } as any)
+const TitleSlugIndexRoute = TitleSlugIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => TitleSlugRoute,
+} as any)
 const AdminTitlesIdIndexRoute = AdminTitlesIdIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -135,6 +141,7 @@ export interface FileRoutesByFullPath {
   '/admin/titles/$id': typeof AdminTitlesIdRouteWithChildren
   '/admin/titles/new': typeof AdminTitlesNewRoute
   '/admin/titles/': typeof AdminTitlesIndexRoute
+  '/title/$slug/': typeof TitleSlugIndexRoute
   '/admin/titles/$id/chapters': typeof AdminTitlesIdChaptersRouteWithChildren
   '/title/$slug/chapter/$number': typeof TitleSlugChapterNumberRoute
   '/admin/titles/$id/': typeof AdminTitlesIdIndexRoute
@@ -147,11 +154,11 @@ export interface FileRoutesByTo {
   '/admin/genres': typeof AdminGenresRoute
   '/admin/login': typeof AdminLoginRouteWithChildren
   '/admin/requests': typeof AdminRequestsRoute
-  '/title/$slug': typeof TitleSlugRouteWithChildren
   '/admin': typeof AdminIndexRoute
   '/admin/login/confirm': typeof AdminLoginConfirmRoute
   '/admin/titles/new': typeof AdminTitlesNewRoute
   '/admin/titles': typeof AdminTitlesIndexRoute
+  '/title/$slug': typeof TitleSlugIndexRoute
   '/admin/titles/$id/chapters': typeof AdminTitlesIdChaptersRouteWithChildren
   '/title/$slug/chapter/$number': typeof TitleSlugChapterNumberRoute
   '/admin/titles/$id': typeof AdminTitlesIdIndexRoute
@@ -173,6 +180,7 @@ export interface FileRoutesById {
   '/admin/titles/$id': typeof AdminTitlesIdRouteWithChildren
   '/admin/titles/new': typeof AdminTitlesNewRoute
   '/admin/titles/': typeof AdminTitlesIndexRoute
+  '/title/$slug/': typeof TitleSlugIndexRoute
   '/admin/titles/$id/chapters': typeof AdminTitlesIdChaptersRouteWithChildren
   '/title/$slug/chapter/$number': typeof TitleSlugChapterNumberRoute
   '/admin/titles/$id/': typeof AdminTitlesIdIndexRoute
@@ -195,6 +203,7 @@ export interface FileRouteTypes {
     | '/admin/titles/$id'
     | '/admin/titles/new'
     | '/admin/titles/'
+    | '/title/$slug/'
     | '/admin/titles/$id/chapters'
     | '/title/$slug/chapter/$number'
     | '/admin/titles/$id/'
@@ -207,11 +216,11 @@ export interface FileRouteTypes {
     | '/admin/genres'
     | '/admin/login'
     | '/admin/requests'
-    | '/title/$slug'
     | '/admin'
     | '/admin/login/confirm'
     | '/admin/titles/new'
     | '/admin/titles'
+    | '/title/$slug'
     | '/admin/titles/$id/chapters'
     | '/title/$slug/chapter/$number'
     | '/admin/titles/$id'
@@ -232,6 +241,7 @@ export interface FileRouteTypes {
     | '/admin/titles/$id'
     | '/admin/titles/new'
     | '/admin/titles/'
+    | '/title/$slug/'
     | '/admin/titles/$id/chapters'
     | '/title/$slug/chapter/$number'
     | '/admin/titles/$id/'
@@ -345,6 +355,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminTitlesNewRouteImport
       parentRoute: typeof AdminTitlesRoute
     }
+    '/title/$slug/': {
+      id: '/title/$slug/'
+      path: '/'
+      fullPath: '/title/$slug/'
+      preLoaderRoute: typeof TitleSlugIndexRouteImport
+      parentRoute: typeof TitleSlugRoute
+    }
     '/admin/titles/$id/': {
       id: '/admin/titles/$id/'
       path: '/'
@@ -452,10 +469,12 @@ const AdminRouteChildren: AdminRouteChildren = {
 const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
 
 interface TitleSlugRouteChildren {
+  TitleSlugIndexRoute: typeof TitleSlugIndexRoute
   TitleSlugChapterNumberRoute: typeof TitleSlugChapterNumberRoute
 }
 
 const TitleSlugRouteChildren: TitleSlugRouteChildren = {
+  TitleSlugIndexRoute: TitleSlugIndexRoute,
   TitleSlugChapterNumberRoute: TitleSlugChapterNumberRoute,
 }
 

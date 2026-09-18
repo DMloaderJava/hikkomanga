@@ -50,7 +50,8 @@ export function seoForRoute(routeId: string, data?: any): SeoInput {
           'Разместите баннер между главами манги для активной аудитории читателей.',
       };
 
-    case '/title/$slug': {
+    case '/title/$slug':
+    case '/title/$slug/': {
       const title = data?.title;
       if (!title) return { noindex: true };
       return {
