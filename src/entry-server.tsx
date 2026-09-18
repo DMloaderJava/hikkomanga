@@ -21,6 +21,22 @@ export type PrerenderResult = {
   seo: SeoInput;
 };
 
+/** Маршрут не найден (несуществующий тайтл/глава) → боту отдаваем 404. */
+export class PrerenderNotFoundError extends Error {
+  constructor(routeId: string) {
+    super(`not found on ${routeId}`);
+    this.name = 'PrerenderNotFoundError';
+  }
+}
+
+/** Loader упал с ошибкой (например, Supabase недоступен) → боту отдаём 503. */
+export class PrerenderRenderError extends Error {
+  constructor(routeId: string) {
+    super(`loader error on ${routeId}`);
+    this.name = 'PrerenderRenderError';
+  }
+}
+
 type MatchLike = {
   routeId: string;
   status?: string;
@@ -39,7 +55,10 @@ export async function prerender(url: string): Promise<PrerenderResult> {
   const matches = router.state.matches as Array<MatchLike>;
   const broken = matches.find((m) => m.status === 'error' || m.status === 'notFound');
   if (broken) {
-    throw new Error(`loader error on ${broken.routeId}`);
+    if (broken.status === 'notFound') {
+      throw new PrerenderNotFoundError(broken.routeId);
+    }
+    throw new PrerenderRenderError(broken.routeId);
   }
 
   const last = matches[matches.length - 1];

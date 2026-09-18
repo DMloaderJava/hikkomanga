@@ -19,6 +19,16 @@
   }
 }
 
+@layer utilities {
+  /* Пропуск layout/paint вне вьюпорта: браузер не рендерит длинные списки
+     глав, пока до них не доскроллят. Контент остаётся в DOM — пререндер
+     и динамический рендер для ботов видят его целиком. */
+  .cv-auto {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 600px;
+  }
+}
+
 /* Custom scrollbars for reader & admin */
 ::-webkit-scrollbar {
   width: 8px;

@@ -18,7 +18,7 @@ export function ChapterList({ slug, chapters }: ChapterListProps) {
   }
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="cv-auto flex flex-col gap-2">
       {chapters.map((ch) => (
         <Link
           key={ch.id}

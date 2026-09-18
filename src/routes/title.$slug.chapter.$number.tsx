@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { createFileRoute } from '@tanstack/react-router';
+import { createFileRoute, notFound } from '@tanstack/react-router';
 import { useQuery } from '@tanstack/react-query';
 import { titles as titlesApi } from '@/data/titles';
 import { chapters as chaptersApi } from '@/data/chapters';
@@ -16,7 +16,7 @@ export const Route = createFileRoute('/title/$slug/chapter/$number')({
       queryFn: () => titlesApi.getBySlug(params.slug),
       staleTime: 1000 * 60 * 5,
     });
-    if (!titleData || !titleData.published) throw new Error('Тайтл не найден');
+    if (!titleData || !titleData.published) throw notFound();
 
     const num = parseFloat(params.number);
     const chapterData = await queryClient.ensureQueryData({
@@ -24,7 +24,7 @@ export const Route = createFileRoute('/title/$slug/chapter/$number')({
       queryFn: () => chaptersApi.getByNumber(titleData.id, num),
       staleTime: Infinity,
     });
-    if (!chapterData || !chapterData.published) throw new Error('Глава не найдена');
+    if (!chapterData || !chapterData.published) throw notFound();
 
     const [chapterPages, nav] = await Promise.all([
       queryClient.ensureQueryData({

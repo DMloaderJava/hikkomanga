@@ -40,6 +40,66 @@ function writeDevChallenges(list: DevChallenge[]) {
   fs.writeFileSync(DEV_CHALLENGES_PATH, JSON.stringify(list, null, 2));
 }
 
+/**
+ * Resource hints в <head> index.html (ускорение первого экрана):
+ *  - preconnect/dns-prefetch к Supabase — данные каталога и обложки тянутся
+ *    оттуда; без подсказки браузер начинает ставить соединение только когда
+ *    JS сам сделает первый запрос (лишний DNS+TCP+TLS на критическом пути);
+ *  - preconnect к Vercel Analytics (прод).
+ * Инжектится и в dev, и в build — попадает в dist/index.html, а значит и в
+ * пререндеренные/динамически отрендеренные страницы.
+ */
+function injectResourceHints(supabaseUrl: string) {
+  return {
+    name: 'inject-resource-hints',
+    transformIndexHtml: {
+      order: 'pre' as const,
+      handler(html: string) {
+        const hints: string[] = [];
+        if (supabaseUrl) {
+          hints.push(
+            `<link rel="preconnect" href="${supabaseUrl}" crossorigin />`,
+            `<link rel="dns-prefetch" href="${supabaseUrl}" />`,
+          );
+        }
+        hints.push('<link rel="preconnect" href="https://va.vercel-scripts.com" />');
+        return html.replace('</head>', `    ${hints.join('\n    ')}\n  </head>`);
+      },
+    },
+  };
+}
+
+/**
+ * Сохраняет нетронутый SPA-шелл в dist/ssr-shell.html сразу после клиентской
+ * сборки. Дальше dist/index.html перезапишет пререндер (для `/`), а чистый
+ * шелл нужен: (1) SSR-сборке как шаблон (src/entry-render.ts, `?raw`-импорт),
+ * (2) scripts/prerender.mjs как источнику шаблона. Без копии standalone-запуск
+ * `build:ssr`/`prerender` после полного билда взял бы шаблоном уже
+ * отрендеренную главную и вставлял контент дважды.
+ */
+function preserveSsrShell() {
+  let distDir = 'dist';
+  return {
+    name: 'preserve-ssr-shell',
+    configResolved(config: any) {
+      distDir = path.resolve(config.root, config.build.outDir);
+    },
+    writeBundle() {
+      try {
+        const shellPath = path.join(distDir, 'index.html');
+        if (!fs.existsSync(shellPath)) return;
+        const html = fs.readFileSync(shellPath, 'utf8');
+        // Копируем только «чистый» шелл — с пустым #root (до пререндера).
+        if (html.includes('<div id="root"></div>')) {
+          fs.writeFileSync(path.join(distDir, 'ssr-shell.html'), html, 'utf8');
+        }
+      } catch (error: any) {
+        console.warn('[preserve-ssr-shell] не удалось сохранить шелл:', error?.message ?? error);
+      }
+    },
+  };
+}
+
 function resolveDevChallenge(
   token: string,
   action: 'approve' | 'deny'
@@ -104,6 +164,8 @@ export default defineConfig(({ mode }) => {
         generatedRouteTree: './src/routeTree.gen.ts',
       }),
       react(),
+      injectResourceHints(env.VITE_SUPABASE_URL || ''),
+      preserveSsrShell(),
       ...(process.env.ANALYZE === 'true'
         ? [
             visualizer({

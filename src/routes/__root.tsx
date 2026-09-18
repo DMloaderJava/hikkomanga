@@ -5,7 +5,7 @@ import { Analytics } from '@vercel/analytics/react';
 import { Header } from '@/components/layout/Header';
 import { Footer } from '@/components/layout/Footer';
 import { Button } from '@/components/ui/button';
-import { AlertTriangle, Home } from 'lucide-react';
+import { AlertTriangle, BookX, Home } from 'lucide-react';
 import { setNoindex } from '@/lib/seo';
 import { queryClient } from '@/lib/queryClient';
 import '@/styles/globals.css';
@@ -29,6 +29,34 @@ function RootErrorComponent({ error }: { error: any }) {
       </div>
       <h1 className="text-2xl font-bold tracking-tight text-white mb-2">Произошла ошибка</h1>
       <p className="text-sm text-neutral-400 max-w-md mb-6">{error?.message || 'Не удалось загрузить данные'}</p>
+      <Link to="/">
+        <Button className="gap-2">
+          <Home className="h-4 w-4" /> На главную
+        </Button>
+      </Link>
+    </div>
+  );
+}
+
+/**
+ * 404 (тайтл/глава не найдены — `throw notFound()` в loader'ах публичных
+ * маршрутов). SPA отвечает 200, поэтому явно ставим noindex; бот с dynamic
+ * rendering получает эту же страницу уже со статусом 404.
+ */
+function RootNotFoundComponent() {
+  useEffect(() => {
+    setNoindex(true);
+  }, []);
+
+  return (
+    <div className="flex min-h-screen flex-col items-center justify-center p-6 text-center bg-neutral-950 text-neutral-100">
+      <div className="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-neutral-900 text-neutral-400 border border-neutral-800 mb-4">
+        <BookX className="h-8 w-8" />
+      </div>
+      <h1 className="text-2xl font-bold tracking-tight text-white mb-2">Страница не найдена</h1>
+      <p className="text-sm text-neutral-400 max-w-md mb-6">
+        Тайтл или глава не существует либо была удалена.
+      </p>
       <Link to="/">
         <Button className="gap-2">
           <Home className="h-4 w-4" /> На главную

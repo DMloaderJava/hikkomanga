@@ -8,58 +8,29 @@
  * сразу. Клиентский бандл при этом никуда не девается: после загрузки JS
  * приложение продолжает работать как обычно.
  *
+ * Дополнение к статике — динамический рендер в рантайме (middleware.ts +
+ * api/render.mjs): он покрывает URL, которых не было на момент сборки.
+ *
  * Запуск: `node scripts/prerender.mjs` (в package.json — после `vite build`).
  */
 import fs from 'node:fs';
 import path from 'node:path';
 import { createServer } from 'vite';
 import { getPublicUrls, maxUrls } from './lib/urls.mjs';
+import { buildHtml } from '../src/lib/render-html.mjs';
 
 const DIST = path.resolve(process.cwd(), 'dist');
-const TEMPLATE_PATH = path.join(DIST, 'index.html');
-const ROOT_MARKER = '<div id="root"></div>';
-
-// Теги, которыми управляет пререндер: удаляем дефолтные из шаблона,
-// чтобы в <head> не оказалось двух description / canonical.
-const MANAGED_META =
-  /<meta[^>]*(?:name|property)\s*=\s*"(?:description|robots|og:[^"]*|twitter:[^"]*)"/i;
-const MANAGED_LINK = /<link[^>]*rel\s*=\s*"canonical"/i;
-const TITLE_TAG = /<title[\s\S]*?<\/title>/i;
+// Нетронутый SPA-шелл (плагин preserve-ssr-shell в vite.config.ts). Fallback на
+// index.html — для случая, когда скрипт запускают сразу после чистой client-сборки.
+const TEMPLATE_PATH = fs.existsSync(path.join(DIST, 'ssr-shell.html'))
+  ? path.join(DIST, 'ssr-shell.html')
+  : path.join(DIST, 'index.html');
 
 function outputPathFor(urlPath) {
   const clean = urlPath.replace(/\/+$/, '') || '/';
   return clean === '/'
     ? path.join(DIST, 'index.html')
     : path.join(DIST, clean.replace(/^\//, ''), 'index.html');
-}
-
-/** Собирает итоговый HTML: новые <head>-теги + отрендеренное тело. */
-function buildHtml(template, { html, head }) {
-  const withoutManaged = template
-    .split('\n')
-    .filter(
-      (line) =>
-        !MANAGED_META.test(line) &&
-        !MANAGED_LINK.test(line) &&
-        !TITLE_TAG.test(line),
-    )
-    .join('\n');
-
-  let result = withoutManaged;
-  if (result.includes('</head>')) {
-    result = result.replace('</head>', `    ${head}\n  </head>`);
-  } else {
-    // На всякий случай: шаблон без </head> — просто дописываем в начало.
-    result = result.replace('<head>', `<head>\n    ${head}`);
-  }
-
-  if (result.includes(ROOT_MARKER)) {
-    result = result.replace(ROOT_MARKER, `<div id="root">${html}</div>`);
-  } else {
-    console.warn('[prerender] в шаблоне нет <div id="root"></div> — пропуск вставки.');
-  }
-
-  return result;
 }
 
 async function main() {

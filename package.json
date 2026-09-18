@@ -5,17 +5,20 @@
   "scripts": {
     "dev": "vite",
     "analyze": "ANALYZE=true vite build",
-    "build": "vite build && node scripts/generate-sitemap.mjs && node scripts/prerender.mjs && node scripts/check-verification.mjs --built",
+    "build": "vite build && vite build --config vite.ssr.config.ts && node scripts/generate-sitemap.mjs && node scripts/prerender.mjs && node scripts/check-verification.mjs --built",
     "build:spa": "vite build",
     "prerender": "node scripts/prerender.mjs",
     "sitemap": "node scripts/generate-sitemap.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "node scripts/check-verification.mjs && node --test scripts/unit-verification.mjs && node scripts/smoke-data-layer.mjs && node scripts/unit-auth-notify.mjs",
+    "test": "node scripts/check-verification.mjs && node --test scripts/unit-verification.mjs && node scripts/smoke-data-layer.mjs && node scripts/unit-auth-notify.mjs && node --test scripts/unit-dynamic-render.mjs",
     "test:verification": "node scripts/check-verification.mjs",
     "test:unit": "node scripts/unit-auth-notify.mjs",
     "test:smoke": "node scripts/smoke-data-layer.mjs",
-    "test:verification:unit": "node --test scripts/unit-verification.mjs"
+    "test:verification:unit": "node --test scripts/unit-verification.mjs",
+    "build:ssr": "vite build --config vite.ssr.config.ts",
+    "preview:dynamic": "node scripts/serve-dynamic.mjs",
+    "test:dynamic": "node --test scripts/unit-dynamic-render.mjs"
   },
   "repository": {
     "type": "git",
@@ -36,6 +39,7 @@
     "@tanstack/react-query": "^5.102.8",
     "@tanstack/react-router": "^1.170.35",
     "@vercel/analytics": "^2.0.1",
+    "@vercel/functions": "^3.9.8",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^1.45.0",

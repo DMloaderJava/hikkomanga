@@ -3,7 +3,12 @@ import type { Title } from '@/data/types';
 import { Badge } from '@/components/ui/badge';
 import { BookOpen } from 'lucide-react';
 
-export function TitleCard({ title }: { title: Title }) {
+/**
+ * priority=true — обложки первого ряда каталога: eager + fetchPriority=high
+ * (это LCP-элемент главной). Остальные ленивые — браузер не качает хвост
+ * каталога, который пользователь ещё не видел.
+ */
+export function TitleCard({ title, priority = false }: { title: Title; priority?: boolean }) {
   return (
     <Link
       to="/title/$slug"
@@ -16,7 +21,9 @@ export function TitleCard({ title }: { title: Title }) {
             src={title.cover_url}
             alt={title.title}
             className="h-full w-full object-cover object-center transition-transform duration-500 group-hover:scale-105"
-            loading="lazy"
+            loading={priority ? 'eager' : 'lazy'}
+            decoding="async"
+            fetchPriority={priority ? 'high' : 'auto'}
           />
         ) : (
           <div className="flex h-full w-full items-center justify-center bg-neutral-900 text-neutral-700">

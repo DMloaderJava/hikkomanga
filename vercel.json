@@ -3,6 +3,12 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "trailingSlash": false,
+  "functions": {
+    "api/render.mjs": {
+      "memory": 1024,
+      "maxDuration": 15
+    }
+  },
   "rewrites": [
     {
       "source": "/((?!api(?:/|$)|assets(?:/|$)|media(?:/|$)|google[^/]+\\.html$|yandex_[^/]+\\.html$|sitemap\\.xml$|robots\\.txt$).*)",

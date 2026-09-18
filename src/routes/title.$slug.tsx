@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { createFileRoute, Link } from '@tanstack/react-router';
+import { createFileRoute, Link, notFound } from '@tanstack/react-router';
 import { titles as titlesApi } from '@/data/titles';
 import { chapters as chaptersApi } from '@/data/chapters';
 import { ChapterList } from '@/components/manga/ChapterList';
@@ -13,7 +13,9 @@ export const Route = createFileRoute('/title/$slug')({
   loader: async ({ params }) => {
     const titleData = await titlesApi.getBySlug(params.slug);
     if (!titleData || !titleData.published) {
-      throw new Error('Тайтл не найден');
+      // notFound() (а не Error) → рендерится notFoundComponent, а серверный
+      // рендер для бота отдаёт честный 404 вместо soft-404 в индексе
+      throw notFound();
     }
     const chapterList = await chaptersApi.listByTitle(titleData.id, false);
     return { title: titleData, chapters: chapterList };
