@@ -51,7 +51,7 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col font-sans selection:bg-rose-600 selection:text-white antialiased">
+      <div className="min-h-screen bg-[#140e12] text-neutral-100 flex flex-col font-sans selection:bg-rose-600 selection:text-white antialiased">
         {!isAdminRoute && !isReaderRoute && <Header />}
         <div className="flex-1">
           <Outlet />
