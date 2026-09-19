@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { updateMetaTags } from '@/lib/seo';
 
-export const Route = createFileRoute('/admin/login/confirm')({
+export const Route = createFileRoute('/admin/login_/confirm')({
   validateSearch: (search: Record<string, unknown>) => ({
     token: typeof search.token === 'string' ? search.token : '',
     action:
