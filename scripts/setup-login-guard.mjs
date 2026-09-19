@@ -28,9 +28,11 @@
  *   3. Проверяет наличие supabase/functions/{login-notify,login-confirm}/index.ts
  *      в репозитории до деплоя.
  *   4. `supabase functions deploy login-notify` + `login-confirm`
- *   5. Проверяет деплой анонимными запросами: login-notify → 401, login-confirm
- *      → 400 (или 200 с {ok:false}); главное — НЕ 404 и не 000.
- *      Внимание: login-confirm 401 не отдаёт ни при каких условиях.
+ *   5. Проверяет деплой анонимными запросами. Без Authorization шлюз Edge
+ *      Functions отвечает 401 у обеих функций; 404 = не задеплоена, 000 =
+ *      сеть/DNS. Чтобы дойти до кода функции нужен валидный JWT: с публичным
+ *      ключом login-confirm отвечает 400, login-notify — 401 «нет сессии».
+ *      (Полный набор проб — `npm run check:supabase`.)
  *
  * ВАЖНО про Resend: отправитель по умолчанию — onboarding@resend.dev, он
  * доставляет письма ТОЛЬКО на адрес аккаунта, в котором создан ключ. Для
@@ -317,11 +319,9 @@ async function probe(name, body, expectNote) {
 }
 
 console.log('\n→ Проверяю деплой анонимными запросами (токены не нужны)…');
-// Без Authorization login-notify обязана вернуть 401 — значит жива.
-await probe('login-notify', {}, 'ожидаем 401 «нет сессии»');
-// login-confirm 401 не отдаёт никогда: с мусорным токеном — 200 {ok:false,...}
-// или 400 «token and action required»; главное, не 404.
-await probe('login-confirm', { token: 'setup-check', action: 'approve' }, 'ожидаем 400/200 «нет токена»');
+// Без Authorization 401 отдаёт шлюз — значит функция задеплоена.
+await probe('login-notify', {}, 'ожидаем 401 от шлюза (задеплоена)');
+await probe('login-confirm', { token: 'setup-check', action: 'approve' }, 'ожидаем 401 от шлюза (задеплоена)');
 
 console.log(
   [

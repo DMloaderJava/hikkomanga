@@ -49,7 +49,7 @@ GEMINI_API_KEY=<ключ Gemini>   # только для AI-анализа и о
    `chapters`, `pages`, `user_roles`, функция `has_role()`, RLS-политики.
 2. `00000000000001_voiceovers.sql` — `chapter_voiceovers` + бакет `voiceovers`.
 3. `00000000000002_storage_buckets.sql` — бакеты `manga` (публичный) и
-   `manga-originals` (приватный) + политики.
+   `hikko-originals` (приватный) + политики.
 4. `00000000000003_login_challenges.sql` — таблица `login_challenges` + RPC
    `create_login_challenge` / `resolve_login_challenge` /
    `latest_login_challenge_status` (обязательное подтверждение входа).
@@ -269,20 +269,33 @@ inline-скриптов). `style-src` оставляет `'unsafe-inline'` — T
 функций **разные**:
 
 ```bash
-# login-notify: без Authorization обязана вернуть 401 (нет сессии)
+# 1) Задеплоена ли функция. Без Authorization 401 отдаёт сам шлюз Edge
+#    Functions — этого достаточно, чтобы понять: функция на месте.
 curl -s -o /dev/null -w '%{http_code}\n' -X POST \
   https://<project-ref>.supabase.co/functions/v1/login-notify
-# 401 = задеплоена и жива
-# 404 = функция не задеплоена
-# 000 = сеть/DNS (или удалённый project-ref)
-
-# login-confirm: 401 не отдаёт НИКОГДА — на пустое тело отвечает 400
 curl -s -o /dev/null -w '%{http_code}\n' -X POST \
   -H 'Content-Type: application/json' -d '{}' \
   https://<project-ref>.supabase.co/functions/v1/login-confirm
-# 400 = задеплоена (token and action required)
+# 401 = задеплоена (шлюз: Missing authorization header)
 # 404 = функция не задеплоена
+# 000 = сеть/DNS (или удалённый project-ref)
+
+# 2) Живой ли код функции. Шлюз пропускает запрос только с валидным JWT —
+#    подойдёт publishable/anon ключ в Authorization.
+curl -s -X POST -H "Authorization: Bearer $ANON_KEY" \
+  -H 'Content-Type: application/json' -d '{}' \
+  https://<project-ref>.supabase.co/functions/v1/login-confirm
+# → 400 {"ok":false,"error":"token and action=approve|deny required"}
+
+curl -s -X POST -H "Authorization: Bearer $ANON_KEY" \
+  -H 'Content-Type: application/json' -d '{}' \
+  https://<project-ref>.supabase.co/functions/v1/login-notify
+# → 401 {"ok":false,"error":"Unauthorized"} — пользовательской сессии нет
 ```
+
+Ту же проверку целиком (окружение, DNS, таблицы, RPC, бакеты, функции, Auth)
+делает одна команда: `npm run check:supabase` — она печатает список задач,
+если чего-то не хватает.
 
 Письма от `onboarding@resend.dev` часто падают в спам; если письмо не
 приходит вовсе — почти наверняка `OWNER_NOTIFY_EMAIL` не совпадает с адресом
