@@ -19,7 +19,7 @@ import { Route as AdminLoginRouteImport } from './routes/admin.login'
 import { Route as AdminRequestsRouteImport } from './routes/admin.requests'
 import { Route as AdminTitlesRouteImport } from './routes/admin.titles'
 import { Route as TitleSlugRouteImport } from './routes/title.$slug'
-import { Route as AdminLoginConfirmRouteImport } from './routes/admin.login.confirm'
+import { Route as AdminLoginConfirmRouteImport } from './routes/admin.login_.confirm'
 import { Route as AdminTitlesIndexRouteImport } from './routes/admin.titles.index'
 import { Route as AdminTitlesIdRouteImport } from './routes/admin.titles.$id'
 import { Route as AdminTitlesNewRouteImport } from './routes/admin.titles.new'
@@ -80,9 +80,9 @@ const TitleSlugRoute = TitleSlugRouteImport.update({
   getParentRoute: () => rootRouteImport,
 } as any)
 const AdminLoginConfirmRoute = AdminLoginConfirmRouteImport.update({
-  id: '/confirm',
-  path: '/confirm',
-  getParentRoute: () => AdminLoginRoute,
+  id: '/login_/confirm',
+  path: '/login/confirm',
+  getParentRoute: () => AdminRoute,
 } as any)
 const AdminTitlesIndexRoute = AdminTitlesIndexRouteImport.update({
   id: '/',
@@ -132,7 +132,7 @@ export interface FileRoutesByFullPath {
   '/advertise': typeof AdvertiseRoute
   '/admin/ads': typeof AdminAdsRoute
   '/admin/genres': typeof AdminGenresRoute
-  '/admin/login': typeof AdminLoginRouteWithChildren
+  '/admin/login': typeof AdminLoginRoute
   '/admin/requests': typeof AdminRequestsRoute
   '/admin/titles': typeof AdminTitlesRouteWithChildren
   '/title/$slug': typeof TitleSlugRouteWithChildren
@@ -152,7 +152,7 @@ export interface FileRoutesByTo {
   '/advertise': typeof AdvertiseRoute
   '/admin/ads': typeof AdminAdsRoute
   '/admin/genres': typeof AdminGenresRoute
-  '/admin/login': typeof AdminLoginRouteWithChildren
+  '/admin/login': typeof AdminLoginRoute
   '/admin/requests': typeof AdminRequestsRoute
   '/admin': typeof AdminIndexRoute
   '/admin/login/confirm': typeof AdminLoginConfirmRoute
@@ -171,12 +171,12 @@ export interface FileRoutesById {
   '/advertise': typeof AdvertiseRoute
   '/admin/ads': typeof AdminAdsRoute
   '/admin/genres': typeof AdminGenresRoute
-  '/admin/login': typeof AdminLoginRouteWithChildren
+  '/admin/login': typeof AdminLoginRoute
   '/admin/requests': typeof AdminRequestsRoute
   '/admin/titles': typeof AdminTitlesRouteWithChildren
   '/title/$slug': typeof TitleSlugRouteWithChildren
   '/admin/': typeof AdminIndexRoute
-  '/admin/login/confirm': typeof AdminLoginConfirmRoute
+  '/admin/login_/confirm': typeof AdminLoginConfirmRoute
   '/admin/titles/$id': typeof AdminTitlesIdRouteWithChildren
   '/admin/titles/new': typeof AdminTitlesNewRoute
   '/admin/titles/': typeof AdminTitlesIndexRoute
@@ -237,7 +237,7 @@ export interface FileRouteTypes {
     | '/admin/titles'
     | '/title/$slug'
     | '/admin/'
-    | '/admin/login/confirm'
+    | '/admin/login_/confirm'
     | '/admin/titles/$id'
     | '/admin/titles/new'
     | '/admin/titles/'
@@ -327,12 +327,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof TitleSlugRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/admin/login/confirm': {
-      id: '/admin/login/confirm'
-      path: '/confirm'
+    '/admin/login_/confirm': {
+      id: '/admin/login_/confirm'
+      path: '/login/confirm'
       fullPath: '/admin/login/confirm'
       preLoaderRoute: typeof AdminLoginConfirmRouteImport
-      parentRoute: typeof AdminLoginRoute
+      parentRoute: typeof AdminRoute
     }
     '/admin/titles/': {
       id: '/admin/titles/'
@@ -393,18 +393,6 @@ declare module '@tanstack/react-router' {
   }
 }
 
-interface AdminLoginRouteChildren {
-  AdminLoginConfirmRoute: typeof AdminLoginConfirmRoute
-}
-
-const AdminLoginRouteChildren: AdminLoginRouteChildren = {
-  AdminLoginConfirmRoute: AdminLoginConfirmRoute,
-}
-
-const AdminLoginRouteWithChildren = AdminLoginRoute._addFileChildren(
-  AdminLoginRouteChildren,
-)
-
 interface AdminTitlesIdChaptersRouteChildren {
   AdminTitlesIdChaptersCidRoute: typeof AdminTitlesIdChaptersCidRoute
 }
@@ -451,19 +439,21 @@ const AdminTitlesRouteWithChildren = AdminTitlesRoute._addFileChildren(
 interface AdminRouteChildren {
   AdminAdsRoute: typeof AdminAdsRoute
   AdminGenresRoute: typeof AdminGenresRoute
-  AdminLoginRoute: typeof AdminLoginRouteWithChildren
+  AdminLoginRoute: typeof AdminLoginRoute
   AdminRequestsRoute: typeof AdminRequestsRoute
   AdminTitlesRoute: typeof AdminTitlesRouteWithChildren
   AdminIndexRoute: typeof AdminIndexRoute
+  AdminLoginConfirmRoute: typeof AdminLoginConfirmRoute
 }
 
 const AdminRouteChildren: AdminRouteChildren = {
   AdminAdsRoute: AdminAdsRoute,
   AdminGenresRoute: AdminGenresRoute,
-  AdminLoginRoute: AdminLoginRouteWithChildren,
+  AdminLoginRoute: AdminLoginRoute,
   AdminRequestsRoute: AdminRequestsRoute,
   AdminTitlesRoute: AdminTitlesRouteWithChildren,
   AdminIndexRoute: AdminIndexRoute,
+  AdminLoginConfirmRoute: AdminLoginConfirmRoute,
 }
 
 const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
