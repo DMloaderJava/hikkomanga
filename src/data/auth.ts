@@ -3,6 +3,8 @@ import { mockStore } from './mockStore';
 import {
   notifyAdminLogin,
   getLoginChallengeStatus,
+  readLoginChallenge,
+  clearLoginChallenge,
   type LoginNotifyResult,
 } from './notify';
 
@@ -191,16 +193,12 @@ export const auth = {
 
   async signOut() {
     mockStore.setAdminSession(null);
-    if (typeof window !== 'undefined') {
-      try {
-        // Полный сброс LS: approved/pending/denied.
-        // Иначе soft-fail keep-alive (error + local approved) открыл бы
-        // /admin после signOut без нового письма.
-        localStorage.removeItem('manga_login_challenge');
-      } catch {
-        // ignore
-      }
-    }
+    // Полный сброс LS: approved/pending/denied.
+    // Иначе soft-fail keep-alive (error + local approved) открыл бы
+    // /admin после signOut без нового письма.
+    // clearLoginChallenge (а не localStorage.removeItem): экран ожидания в этой
+    // вкладке и подписчики получают событие «challenge исчез».
+    clearLoginChallenge();
     notifyAuthChanged(null);
     if (isSupabaseConfigured) {
       try {
@@ -265,11 +263,7 @@ export const auth = {
       // Keep-alive только если локально уже подтверждали эту сессию.
       try {
         if (typeof window !== 'undefined') {
-          const raw = localStorage.getItem('manga_login_challenge');
-          if (raw) {
-            const ch = JSON.parse(raw) as { status?: string };
-            if (ch.status === 'approved') return null;
-          }
+          if (readLoginChallenge()?.status === 'approved') return null;
         }
       } catch {
         // ignore

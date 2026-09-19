@@ -43,6 +43,162 @@ export type LoginChallengeStatus =
   | 'error'
   | string;
 
+/** Ключ localStorage с последним login-challenge (pending/approved/denied/expired). */
+export const LOGIN_CHALLENGE_LS_KEY = 'manga_login_challenge';
+
+/**
+ * Событие «challenge в localStorage изменился» для ТОГО ЖЕ документа.
+ *
+ * `storage` прилетает только в другие вкладки, поэтому экран ожидания
+ * (`/admin/login`) без этого события узнаёт о смене статуса лишь по polling —
+ * а polling может вернуть устаревший серверный статус (см. getLoginChallengeStatus).
+ */
+export const LOGIN_CHALLENGE_EVENT = 'manga-login-challenge-change';
+
+/** Запись challenge в localStorage. Формат держим в одном месте. */
+export interface StoredLoginChallenge {
+  id?: string;
+  token?: string;
+  status?: string;
+  expiresAt?: string;
+  resolvedAt?: string;
+  emulated?: boolean;
+}
+
+type LoginChallengeListener = (
+  challenge: StoredLoginChallenge | null,
+  source: 'local' | 'remote'
+) => void;
+
+/** Финальные статусы challenge: ждать больше нечего. */
+export function isTerminalChallengeStatus(status?: string | null): boolean {
+  return status === 'approved' || status === 'denied' || status === 'expired';
+}
+
+/** Читает challenge из localStorage: null — записи нет или JSON битый. */
+export function readLoginChallenge(): StoredLoginChallenge | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(LOGIN_CHALLENGE_LS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredLoginChallenge;
+    return parsed && typeof parsed === 'object' ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Статус записи из localStorage с учётом `expiresAt` — как в SQL
+ * `latest_login_challenge_status()`: approved не истекает, pending по времени
+ * становится expired, denied/expired возвращаются как есть.
+ */
+export function localChallengeStatus(): LoginChallengeStatus {
+  const ch = readLoginChallenge();
+  if (!ch?.status) return 'none';
+  const status = String(ch.status);
+  const expiredByTime =
+    Boolean(ch.expiresAt) && new Date(String(ch.expiresAt)).getTime() < Date.now();
+  if (status === 'pending' && expiredByTime) return 'expired';
+  return status as LoginChallengeStatus;
+}
+
+/**
+ * Финальный статус, уже записанный в localStorage (approved/denied/expired),
+ * либо null, если ждать ещё есть смысл. Нужен, чтобы отставший серверный
+ * статус (`pending`/`none`) не «затенял» подтверждение, которое уже получено
+ * в этом браузере.
+ */
+export function localTerminalChallengeStatus(): 'approved' | 'denied' | 'expired' | null {
+  const status = localChallengeStatus();
+  return isTerminalChallengeStatus(status)
+    ? (status as 'approved' | 'denied' | 'expired')
+    : null;
+}
+
+/** Оповещает подписчиков ЭТОГО документа о новой записи challenge. */
+function emitLoginChallengeChange(challenge: StoredLoginChallenge | null) {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return;
+  try {
+    window.dispatchEvent(
+      new CustomEvent(LOGIN_CHALLENGE_EVENT, { detail: { challenge } })
+    );
+  } catch {
+    // CustomEvent может отсутствовать (SSR/старые окружения) — не роняем flow.
+  }
+}
+
+/**
+ * Записать challenge в localStorage и оповестить подписчиков.
+ *
+ * Событие шлём только при реальном изменении записи: polling вызывает функцию
+ * каждые 2.5 с, и «пустые» события заставляли бы экран ожидания перерисовываться
+ * без причины.
+ *
+ * `replace: true` — это НОВЫЙ challenge: старый статус (approved/denied) и
+ * resolvedAt наследовать нельзя, иначе новый вход выглядел бы подтверждённым.
+ */
+export function persistLoginChallenge(
+  patch: StoredLoginChallenge,
+  opts?: { replace?: boolean }
+): StoredLoginChallenge | null {
+  if (typeof window === 'undefined') return null;
+  const before = readLoginChallenge();
+  const base = opts?.replace ? {} : (before ?? {});
+  const next: StoredLoginChallenge = { ...base, ...patch };
+  if (before && JSON.stringify(before) === JSON.stringify(next)) return before;
+  try {
+    localStorage.setItem(LOGIN_CHALLENGE_LS_KEY, JSON.stringify(next));
+  } catch {
+    // Приватный режим/квота: localStorage — не единственный источник статуса.
+    return next;
+  }
+  emitLoginChallengeChange(next);
+  return next;
+}
+
+/** Удалить challenge (signOut) — «записи больше нет» видят и другие вкладки. */
+export function clearLoginChallenge() {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(LOGIN_CHALLENGE_LS_KEY);
+  } catch {
+    // ignore
+  }
+  emitLoginChallengeChange(null);
+}
+
+/**
+ * Подписка на изменения challenge: `storage` (другие вкладки этого origin)
+ * + LOGIN_CHALLENGE_EVENT (эта самая вкладка).
+ *
+ * Благодаря ей экран ожидания переводит `phase` сразу после approve/deny, а не
+ * только по таймеру polling — и продолжает работать, когда серверный статус
+ * отстаёт от localStorage.
+ */
+export function subscribeLoginChallenge(listener: LoginChallengeListener): () => void {
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
+    return () => {};
+  }
+  const onStorage = (event: StorageEvent) => {
+    // key === null — storage.clear(), могли стереть и наш ключ.
+    if (event.key !== null && event.key !== LOGIN_CHALLENGE_LS_KEY) return;
+    listener(readLoginChallenge(), 'remote');
+  };
+  const onLocal = (event: Event) => {
+    const detail = (event as CustomEvent<{ challenge?: StoredLoginChallenge | null }>).detail;
+    const challenge =
+      detail && 'challenge' in detail ? detail.challenge ?? null : readLoginChallenge();
+    listener(challenge, 'local');
+  };
+  window.addEventListener('storage', onStorage as EventListener);
+  window.addEventListener(LOGIN_CHALLENGE_EVENT, onLocal);
+  return () => {
+    window.removeEventListener('storage', onStorage as EventListener);
+    window.removeEventListener(LOGIN_CHALLENGE_EVENT, onLocal);
+  };
+}
+
 /**
  * Достаёт статус и тело ошибки из FunctionsHttpError (supabase-js кладёт
  * оригинальный Response в `error.context`). Тело нашей функции —
@@ -242,8 +398,6 @@ export async function notifyAdminLogin(adminEmail: string): Promise<LoginNotifyR
   }
 }
 
-const CHALLENGE_LS_KEY = 'manga_login_challenge';
-
 /** Запомнить challenge после успешного notify (для polling / hasRole). */
 export function rememberLoginChallenge(result: LoginNotifyResult) {
   if (typeof window === 'undefined' || !result.ok) return;
@@ -256,18 +410,17 @@ export function rememberLoginChallenge(result: LoginNotifyResult) {
   } catch {
     // ignore
   }
-  const payload = {
-    id: result.challengeId,
-    status: 'pending' as const,
-    expiresAt,
-    token,
-    emulated: Boolean(result.emulated),
-  };
-  try {
-    localStorage.setItem(CHALLENGE_LS_KEY, JSON.stringify(payload));
-  } catch {
-    // ignore
-  }
+  // replace: это новый challenge, а не обновление предыдущего.
+  persistLoginChallenge(
+    {
+      id: result.challengeId,
+      status: 'pending',
+      expiresAt,
+      token,
+      emulated: Boolean(result.emulated),
+    },
+    { replace: true }
+  );
 }
 
 /**
@@ -277,15 +430,11 @@ export function rememberLoginChallenge(result: LoginNotifyResult) {
 export async function getLoginChallengeStatus(): Promise<LoginChallengeStatus> {
   if (typeof window === 'undefined') return 'none';
 
+  const local = readLoginChallenge();
+
   // Если challenge создан dev-эмуляцией (даже при настроенном Supabase URL) —
   // не ходим в RPC, которого может не быть / он пустой.
-  let preferDev = !isSupabaseConfigured;
-  try {
-    const raw = localStorage.getItem(CHALLENGE_LS_KEY);
-    if (raw && JSON.parse(raw)?.emulated) preferDev = true;
-  } catch {
-    // ignore
-  }
+  const preferDev = !isSupabaseConfigured || Boolean(local?.emulated);
 
   if (isSupabaseConfigured && !preferDev) {
     try {
@@ -303,31 +452,41 @@ export async function getLoginChallengeStatus(): Promise<LoginChallengeStatus> {
     }
   }
 
+  /**
+   * Финализация статуса перед возвратом: истечение pending по времени —
+   * единственный статус, который вычисляется локально, поэтому его надо
+   * зафиксировать в localStorage — событие подхватит экран ожидания.
+   */
+  const finalize = (status: LoginChallengeStatus): LoginChallengeStatus => {
+    if (status === 'expired' && local?.status === 'pending') {
+      persistLoginChallenge({ status: 'expired' });
+    }
+    return status;
+  };
+
   // Dev API (общий для вкладок на том же origin через server file)
   if (import.meta.env.DEV) {
     try {
-      let id = '';
-      try {
-        const raw = localStorage.getItem(CHALLENGE_LS_KEY);
-        if (raw) id = JSON.parse(raw)?.id || '';
-      } catch {
-        // ignore
-      }
+      const id = local?.id || '';
       const q = id ? `?id=${encodeURIComponent(id)}` : '';
       const res = await fetch(`/api/login-challenge-status${q}`);
       if (res.ok) {
-        const body = (await res.json()) as { status?: string };
+        const body = (await res.json()) as { status?: string; id?: string };
         if (body.status) {
-          // синхронизируем localStorage
-          try {
-            const raw = localStorage.getItem(CHALLENGE_LS_KEY);
-            const ch = raw ? JSON.parse(raw) : {};
-            ch.status = body.status;
-            localStorage.setItem(CHALLENGE_LS_KEY, JSON.stringify(ch));
-          } catch {
-            // ignore
+          const remote = String(body.status);
+          // Локальный финальный статус не должен «затеняться» отставшим dev-API.
+          // Challenge мог быть подтверждён в этом браузере (ссылка из письма в
+          // соседней вкладке, approve через localStorage-fallback), а dev-стор
+          // знает только старый pending: без этой ветки экран ожидания зависает,
+          // хотя в localStorage уже approved/denied/expired.
+          const localTerminal = localTerminalChallengeStatus();
+          const sameChallenge = !local?.id || !body.id || local.id === body.id;
+          if (localTerminal && sameChallenge && !isTerminalChallengeStatus(remote)) {
+            return finalize(localTerminal);
           }
-          return body.status as LoginChallengeStatus;
+          // Синхронизируем localStorage — от этого события узнаёт экран ожидания.
+          persistLoginChallenge({ id: body.id ?? local?.id, status: remote });
+          return finalize(remote as LoginChallengeStatus);
         }
       }
     } catch {
@@ -335,30 +494,7 @@ export async function getLoginChallengeStatus(): Promise<LoginChallengeStatus> {
     }
   }
 
-  try {
-    const raw = localStorage.getItem(CHALLENGE_LS_KEY);
-    if (!raw) return 'none';
-    const ch = JSON.parse(raw) as {
-      status?: string;
-      expiresAt?: string;
-    };
-    // approved не истекает по expiresAt (как в SQL latest_login_challenge_status).
-    // Истекает только pending; denied/expired возвращаем as-is.
-    if (
-      ch.status !== 'approved' &&
-      ch.expiresAt &&
-      new Date(ch.expiresAt).getTime() < Date.now()
-    ) {
-      if (ch.status === 'pending') {
-        ch.status = 'expired';
-        localStorage.setItem(CHALLENGE_LS_KEY, JSON.stringify(ch));
-      }
-      return ch.status === 'expired' || !ch.status ? 'expired' : (ch.status as LoginChallengeStatus);
-    }
-    return (ch.status as LoginChallengeStatus) || 'none';
-  } catch {
-    return 'none';
-  }
+  return finalize(localChallengeStatus());
 }
 
 /**
@@ -374,35 +510,29 @@ export async function resolveLoginChallenge(
     return { ok: false, status: 'invalid', error: 'нет токена' };
   }
 
+  /**
+   * Зафиксировать результат в localStorage. Именно это (плюс `storage` в
+   * других вкладках) мгновенно обновляет экран ожидания — поэтому пишем через
+   * persistLoginChallenge, а не напрямую setItem.
+   */
   const syncLocal = (status: string) => {
     if (typeof window === 'undefined') return;
-    try {
-      const raw = localStorage.getItem(CHALLENGE_LS_KEY);
-      const ch = raw ? JSON.parse(raw) : {};
-      // Обновляем, если токен совпал или токена в кэше ещё нет (письмо с другого устройства).
-      if (!ch.token || ch.token === cleanToken) {
-        ch.token = cleanToken;
-        if (status === 'approved' || status === 'already_approved') ch.status = 'approved';
-        else if (status === 'denied' || status === 'already_denied') ch.status = 'denied';
-        else if (status === 'expired') ch.status = 'expired';
-        else ch.status = status;
-        ch.resolvedAt = new Date().toISOString();
-        localStorage.setItem(CHALLENGE_LS_KEY, JSON.stringify(ch));
-      }
-    } catch {
-      // ignore
-    }
+    const ch = readLoginChallenge();
+    // Обновляем, если токен совпал или токена в кэше ещё нет (письмо с другого устройства).
+    if (ch?.token && ch.token !== cleanToken) return;
+    let next = status;
+    if (status === 'approved' || status === 'already_approved') next = 'approved';
+    else if (status === 'denied' || status === 'already_denied') next = 'denied';
+    else if (status === 'expired') next = 'expired';
+    persistLoginChallenge({
+      token: cleanToken,
+      status: next,
+      resolvedAt: new Date().toISOString(),
+    });
   };
 
   // Dev API первым, если challenge эмулированный или Supabase не настроен.
-  let emulated = false;
-  try {
-    const raw =
-      typeof window !== 'undefined' ? localStorage.getItem(CHALLENGE_LS_KEY) : null;
-    if (raw && JSON.parse(raw)?.emulated) emulated = true;
-  } catch {
-    // ignore
-  }
+  const emulated = Boolean(readLoginChallenge()?.emulated);
 
   if (import.meta.env.DEV && (emulated || !isSupabaseConfigured)) {
     try {
@@ -461,19 +591,14 @@ export async function resolveLoginChallenge(
   // Последний fallback: только localStorage (без dev-сервера).
   if (typeof window !== 'undefined') {
     try {
-      const raw = localStorage.getItem(CHALLENGE_LS_KEY);
-      if (!raw) return { ok: false, status: 'not_found' };
-      const ch = JSON.parse(raw) as {
-        token?: string;
-        status?: string;
-        expiresAt?: string;
-      };
+      const ch = readLoginChallenge();
+      if (!ch) return { ok: false, status: 'not_found' };
       if (ch.token && ch.token !== cleanToken) return { ok: false, status: 'not_found' };
       if (ch.status === 'approved') return { ok: true, status: 'already_approved' };
       if (ch.status === 'denied') return { ok: true, status: 'already_denied' };
       if (ch.expiresAt && new Date(ch.expiresAt).getTime() < Date.now()) {
-        ch.status = 'expired';
-        localStorage.setItem(CHALLENGE_LS_KEY, JSON.stringify(ch));
+        // persist: экран ожидания в этой же вкладке узнаёт об истечении сразу.
+        persistLoginChallenge({ status: 'expired' });
         return { ok: false, status: 'expired' };
       }
       if (ch.status && ch.status !== 'pending') {
@@ -481,10 +606,11 @@ export async function resolveLoginChallenge(
       }
 
       const status = action === 'approve' ? 'approved' : 'denied';
-      ch.token = cleanToken;
-      ch.status = status;
-      (ch as any).resolvedAt = new Date().toISOString();
-      localStorage.setItem(CHALLENGE_LS_KEY, JSON.stringify(ch));
+      persistLoginChallenge({
+        token: cleanToken,
+        status,
+        resolvedAt: new Date().toISOString(),
+      });
       return { ok: true, status };
     } catch (e: any) {
       return { ok: false, status: 'error', error: e?.message };

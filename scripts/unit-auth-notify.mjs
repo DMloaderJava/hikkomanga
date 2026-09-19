@@ -39,6 +39,21 @@ globalThis.localStorage = {
 globalThis.window = globalThis;
 globalThis.window.location = { origin: 'http://localhost:3000' };
 
+// Минимальный EventTarget: в браузере window — EventTarget, а в SSR его нет.
+// Нужен для подписки на challenge (storage / manga-login-challenge-change).
+const domListeners = new Map();
+globalThis.window.addEventListener = (type, handler) => {
+  if (!domListeners.has(type)) domListeners.set(type, new Set());
+  domListeners.get(type).add(handler);
+};
+globalThis.window.removeEventListener = (type, handler) => {
+  domListeners.get(type)?.delete(handler);
+};
+globalThis.window.dispatchEvent = (event) => {
+  for (const handler of [...(domListeners.get(event.type) ?? [])]) handler(event);
+  return true;
+};
+
 const { auth } = await vite.ssrLoadModule('/src/data/auth.ts');
 const { mockStore } = await vite.ssrLoadModule('/src/data/mockStore.ts');
 const notify = await vite.ssrLoadModule('/src/data/notify.ts');
@@ -291,6 +306,181 @@ const st = await (
   await realFetch(`${base}/api/login-challenge-status?id=${nbody.challengeId}`)
 ).json();
 check('dev status approved', st.status === 'approved', st.status);
+
+// ── 2d. Экран ожидания: статус из localStorage обновляет phase ──────────────
+// Регрессия: /admin/login показывал экран ожидания, но не менял phase, когда
+// статус в localStorage становился approved/denied/expired (соседняя вкладка со
+// ссылкой из письма + отставший серверный статус в polling).
+const LS_KEY = notify.LOGIN_CHALLENGE_LS_KEY;
+const future = () => new Date(Date.now() + 60_000).toISOString();
+
+/** Запись из «соседней вкладки»: минуя persist (событий от setItem нет). */
+function seedLs(partial) {
+  store.set(
+    LS_KEY,
+    JSON.stringify({
+      id: 'ch-ls',
+      status: 'pending',
+      emulated: true,
+      expiresAt: future(),
+      ...partial,
+    })
+  );
+}
+
+const challengeEvents = [];
+const unsubscribeChallenge = notify.subscribeLoginChallenge((ch, source) => {
+  challengeEvents.push({ status: ch?.status ?? null, source });
+});
+
+notify.rememberLoginChallenge({
+  ok: true,
+  emulated: true,
+  challengeId: 'ch-ls',
+  preview: { approveUrl: `${base}/admin/login/confirm?token=${'e'.repeat(64)}&action=approve` },
+});
+check(
+  'rememberLoginChallenge → событие local/pending',
+  challengeEvents.at(-1)?.status === 'pending' && challengeEvents.at(-1)?.source === 'local',
+  JSON.stringify(challengeEvents.at(-1))
+);
+
+// Повторная запись того же статуса (polling каждые 2.5 c) не должна слать событие.
+const eventsBeforeNoop = challengeEvents.length;
+notify.persistLoginChallenge({ status: 'pending' });
+check(
+  'повторный тот же статус → без события (polling не дёргает UI)',
+  challengeEvents.length === eventsBeforeNoop
+);
+
+// Соседняя вкладка подтвердила вход → `storage` в этой вкладке.
+seedLs({ status: 'approved' });
+const storageEvent = new CustomEvent('storage');
+storageEvent.key = LS_KEY;
+window.dispatchEvent(storageEvent);
+check(
+  'storage из соседней вкладки → approved/remote',
+  challengeEvents.at(-1)?.status === 'approved' && challengeEvents.at(-1)?.source === 'remote',
+  JSON.stringify(challengeEvents.at(-1))
+);
+
+// approve/deny на этой же вкладке (страница /admin/login/confirm) → local-событие.
+notify.persistLoginChallenge({ status: 'denied' });
+check(
+  'persist approved→denied → local/denied',
+  challengeEvents.at(-1)?.status === 'denied' && challengeEvents.at(-1)?.source === 'local',
+  JSON.stringify(challengeEvents.at(-1))
+);
+
+// signOut: записи больше нет — подписчик получает null (фазу не переключаем).
+await auth.signOut();
+check('signOut → событие с пустым challenge', challengeEvents.at(-1)?.status === null);
+
+// Отставший dev-API не должен затенять локальный approved: challenge подтверждён
+// в браузере (ссылка из письма), а в dev-сторе всё ещё pending.
+const staleRes = await realFetch(`${base}/api/login-notify`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ adminEmail: 'a@b.c', siteUrl: 'http://localhost:3000' }),
+});
+const stale = await staleRes.json();
+const staleToken = new URL(stale.preview.approveUrl).searchParams.get('token');
+const staleRemote = await (
+  await realFetch(`${base}/api/login-challenge-status?id=${stale.challengeId}`)
+).json();
+check('предусловие: dev-стор ещё pending', staleRemote.status === 'pending', staleRemote.status);
+
+seedLs({ id: stale.challengeId, token: staleToken, status: 'approved' });
+const statusShadowed = await notify.getLoginChallengeStatus();
+check(
+  'локальный approved не затеняется dev-API pending',
+  statusShadowed === 'approved',
+  statusShadowed
+);
+check(
+  'LS не откатывается с approved на pending',
+  JSON.parse(store.get(LS_KEY)).status === 'approved',
+  JSON.parse(store.get(LS_KEY)).status
+);
+
+// Обратный случай: подтвердили с другого устройства (сервер approved) —
+// локальный pending обновляется по RPC/dev-API.
+const pendRes = await realFetch(`${base}/api/login-notify`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ adminEmail: 'a@b.c', siteUrl: 'http://localhost:3000' }),
+});
+const pend = await pendRes.json();
+const pendToken = new URL(pend.preview.approveUrl).searchParams.get('token');
+seedLs({ id: pend.challengeId, token: pendToken, status: 'pending' });
+await realFetch(`${base}/api/login-confirm`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ token: pendToken, action: 'approve' }),
+});
+const statusFromServer = await notify.getLoginChallengeStatus();
+check(
+  'серверный approved важнее локального pending',
+  statusFromServer === 'approved',
+  statusFromServer
+);
+check(
+  'LS синхронизирован на approved (событие для экрана ожидания)',
+  JSON.parse(store.get(LS_KEY)).status === 'approved'
+);
+
+// dev-API вообще не знает этот challenge (стор сбросили) — ждём локальный статус.
+seedLs({ id: 'ch-unknown-local', status: 'approved' });
+check(
+  'dev-API none не затеняет локальный approved',
+  (await notify.getLoginChallengeStatus()) === 'approved'
+);
+
+// pending + истёкший expiresAt → expired, и это фиксируется в localStorage.
+seedLs({ id: 'ch-old', status: 'pending', expiresAt: new Date(Date.now() - 1000).toISOString() });
+check('pending + expiresAt в прошлом → expired', (await notify.getLoginChallengeStatus()) === 'expired');
+check(
+  'истечение записано в LS (экран ожидания узнаёт сразу)',
+  JSON.parse(store.get(LS_KEY)).status === 'expired'
+);
+
+unsubscribeChallenge();
+check(
+  'отписка отменяет доставку событий',
+  (() => {
+    const before = challengeEvents.length;
+    notify.persistLoginChallenge({ status: 'approved' });
+    return challengeEvents.length === before;
+  })()
+);
+
+// Маппинг статус → phase (используется и первым рендером, и polling, и событиями).
+const { loginChallengeUx } = await vite.ssrLoadModule('/src/lib/loginChallenge.ts');
+check('ux pending → waiting', loginChallengeUx('pending').phase === 'waiting');
+check(
+  'ux approved → открыть админку',
+  loginChallengeUx('approved').openAdmin === true &&
+    loginChallengeUx('approved').hint.includes('Подтверждено'),
+  JSON.stringify(loginChallengeUx('approved'))
+);
+check(
+  'ux denied → denied + signOut',
+  loginChallengeUx('denied').phase === 'denied' && loginChallengeUx('denied').signOut === true
+);
+check(
+  'ux expired → expired + signOut',
+  loginChallengeUx('expired').phase === 'expired' && loginChallengeUx('expired').signOut === true
+);
+check(
+  'ux error → serviceError (не «none»)',
+  loginChallengeUx('error').serviceError === true &&
+    loginChallengeUx('error').phase === 'service_error'
+);
+check(
+  'ux none → состояние не меняем',
+  Object.keys(loginChallengeUx('none')).length === 0,
+  JSON.stringify(loginChallengeUx('none'))
+);
 
 // ── 2c. classifyEdgeFailure: точная причина сбоя письма для владельца ───────
 const cls404 = notify.classifyEdgeFailure(new Error('Edge Function returned an error'), 404);
