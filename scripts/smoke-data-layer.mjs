@@ -3,15 +3,18 @@
  * Модули загружаются через Vite SSR API, mockStore работает in-memory
  * (window/localStorage отсутствуют — save() просто no-op).
  *
+ * ВАЖНО: тест проверяет именно демо-режим — Supabase-переменные обнуляются
+ * через scripts/lib/demo-mode.mjs, иначе настроенный `.env` разработчика
+ * уводит `src/data/*` в реальную базу (анонимный INSERT падает на RLS).
+ *
  * Запуск: node scripts/smoke-data-layer.mjs
  */
 import { createServer } from 'vite';
+import { forceDemoMode, DEMO_SERVER_OPTIONS } from './lib/demo-mode.mjs';
 
-const server = await createServer({
-  server: { middlewareMode: true },
-  appType: 'custom',
-  logLevel: 'error',
-});
+forceDemoMode();
+
+const server = await createServer(DEMO_SERVER_OPTIONS);
 
 let failures = 0;
 const check = (name, cond) => {
