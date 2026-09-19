@@ -27,7 +27,7 @@ export const storage = {
       try {
         const supabase = await getSupabase();
         // 1. Upload original
-        await supabase.storage.from('manga-originals').upload(originalPath, file, { upsert: true });
+        await supabase.storage.from('hikko-originals').upload(originalPath, file, { upsert: true });
 
         // 2. Upload compressed
         const { error } = await supabase.storage.from('manga').upload(publicPath, compressedBlob, {
@@ -112,7 +112,7 @@ export const storage = {
     try {
       const supabase = await getSupabase();
       if (originalPath && !originalPath.startsWith('data:')) {
-        await supabase.storage.from('manga-originals').remove([originalPath]);
+        await supabase.storage.from('hikko-originals').remove([originalPath]);
       }
       if (imageUrl && !imageUrl.startsWith('data:')) {
         const urlParts = imageUrl.split('/manga/');

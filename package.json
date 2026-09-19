@@ -15,7 +15,8 @@
     "test:verification": "node scripts/check-verification.mjs",
     "test:unit": "node scripts/unit-auth-notify.mjs",
     "test:smoke": "node scripts/smoke-data-layer.mjs",
-    "test:verification:unit": "node --test scripts/unit-verification.mjs"
+    "test:verification:unit": "node --test scripts/unit-verification.mjs",
+    "check:supabase": "node scripts/check-supabase-project.mjs"
   },
   "repository": {
     "type": "git",
