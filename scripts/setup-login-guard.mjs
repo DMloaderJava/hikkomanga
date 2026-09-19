@@ -28,8 +28,9 @@
  *   3. Проверяет наличие supabase/functions/{login-notify,login-confirm}/index.ts
  *      в репозитории до деплоя.
  *   4. `supabase functions deploy login-notify` + `login-confirm`
- *   5. Проверяет деплой: анонимный запрос к функциям
- *      (ожидаем 401 / «нет токена», но НЕ 404).
+ *   5. Проверяет деплой анонимными запросами: login-notify → 401, login-confirm
+ *      → 400 (или 200 с {ok:false}); главное — НЕ 404 и не 000.
+ *      Внимание: login-confirm 401 не отдаёт ни при каких условиях.
  *
  * ВАЖНО про Resend: отправитель по умолчанию — onboarding@resend.dev, он
  * доставляет письма ТОЛЬКО на адрес аккаунта, в котором создан ключ. Для
@@ -58,6 +59,11 @@ function usage(code = 0) {
       '    [--from "Name <noreply@domain.tld>"] [--with-db] [--skip-secrets] [--skip-deploy]',
       '',
       '  --with-db  накатить миграции из supabase/migrations (supabase link + db push).',
+      '             ВНИМАНИЕ: db push идёт по всем файлам подряд. Если часть уже',
+      '             применена руками (SQL Editor), 01/02 упадут на «policy already',
+      '             exists» и остаток не накатится — сверьте',
+      '             supabase_migrations.schema_migrations и примените только',
+      '             недостающие файлы (SETUP_SUPABASE.md, раздел 6).',
       '',
       'Секреты можно задать и через окружение: OWNER_NOTIFY_EMAIL, RESEND_API_KEY.',
       'Требуется: supabase CLI (`npm i -g supabase && supabase login`)',
@@ -311,10 +317,11 @@ async function probe(name, body, expectNote) {
 }
 
 console.log('\n→ Проверяю деплой анонимными запросами (токены не нужны)…');
-// Без Authorization функция обязана вернуть 401 — значит жива.
+// Без Authorization login-notify обязана вернуть 401 — значит жива.
 await probe('login-notify', {}, 'ожидаем 401 «нет сессии»');
-// С мусорным токеном — 200 {ok:false,...} или 400: главное, не 404.
-await probe('login-confirm', { token: 'setup-check', action: 'approve' }, 'ожидаем ответ «нет токена»');
+// login-confirm 401 не отдаёт никогда: с мусорным токеном — 200 {ok:false,...}
+// или 400 «token and action required»; главное, не 404.
+await probe('login-confirm', { token: 'setup-check', action: 'approve' }, 'ожидаем 400/200 «нет токена»');
 
 console.log(
   [

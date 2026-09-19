@@ -6,9 +6,16 @@
  * Ветки статусов (approve/deny/expired/already_*) — через resolveLocal()
  * (зеркало localStorage-fallback из notify.ts; без гонки с import.meta.env.DEV).
  * Happy-path DEV API — отдельно: middleware + патч globalThis.fetch для /api/*.
+ *
+ * Важно: всё это проверяется в ДЕМО-режиме (mockStore). Supabase-переменные
+ * обнуляются через scripts/lib/demo-mode.mjs — иначе настроенный `.env`
+ * уводит `src/data/ads.ts` и др. в реальную базу, и тест падает на RLS.
  */
 import { createServer } from 'vite';
 import { createServer as createHttpServer } from 'node:http';
+import { forceDemoMode, DEMO_SERVER_OPTIONS } from './lib/demo-mode.mjs';
+
+forceDemoMode();
 
 const failures = [];
 const check = (name, cond, detail = '') => {
@@ -17,9 +24,7 @@ const check = (name, cond, detail = '') => {
 };
 
 const vite = await createServer({
-  server: { middlewareMode: true },
-  appType: 'custom',
-  logLevel: 'error',
+  ...DEMO_SERVER_OPTIONS,
   // mode 'test' → import.meta.env.DEV может быть false в ssr; не полагаемся на это.
 });
 

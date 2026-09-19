@@ -174,6 +174,10 @@ supabase secrets set RESEND_API_KEY=re_xxxxxxxxxxxx \
 #    08 DROP'ает 5-arg create_login_challenge и ставит 6-arg + session_id.
 supabase db push
 # или вручную: 03_login_challenges … 08_login_challenge_multidevice.sql
+# На проекте, где часть миграций уже применялась руками (SQL Editor), db push
+# доходит до повторной попытки и падает на `policy already exists` (01/02
+# создают полисы без DROP IF EXISTS) — накатывайте только недостающие файлы,
+# см. «Если проект Supabase пересоздавали или удаляли».
 
 # 3) Edge СРАЗУ после миграций (в одной сессии, без захода в /admin/login между шагами).
 #    Окно: старый edge + новая схема (или наоборот) → login fail до redeploy.
@@ -259,20 +263,81 @@ inline-скриптов). `style-src` оставляет `'unsafe-inline'` — T
 | `не задеплоена` (HTTP 404) (`fn-not-deployed`) | `login-notify` нет в проекте | `supabase functions deploy login-notify --project-ref <ref>` (+ `login-confirm`) |
 | `не задан OWNER_NOTIFY_EMAIL` / `не задан RESEND_API_KEY` (`secrets-missing`) | Функция задеплоена, но секретов нет | `supabase secrets set OWNER_NOTIFY_EMAIL=… RESEND_API_KEY=… --project-ref <ref>` |
 | `Resend не принял письмо: …` (`resend`) | Ключ/домен отправителя не прошли в Resend | Проверить `RESEND_API_KEY`; `onboarding@resend.dev` шлёт **только на адрес аккаунта** — иначе подтвердить домен и задать `OWNER_NOTIFY_FROM` |
-| `Не удалось достучаться до Edge Function … сетевая ошибка, блокировка или CORS` (`network`) | Запрос не дошёл до edge-гейтвея: DNS/CORS/файрвол/блокировщик (приходит как FunctionsFetchError без context/status) | Проверить доступность `<ref>.supabase.co`; curl-проверка ниже; если curl показывает 404 — задеплоить функцию; если 000 — чинить сеть |
+| `Не удалось достучаться до Edge Function … сетевая ошибка, блокировка или CORS` (`network`) | Запрос не дошёл до edge-гейтвея: DNS/CORS/файрвол/блокировщик (приходит как FunctionsFetchError без context/status) | Проверить доступность `<ref>.supabase.co`; curl-проверка ниже; если curl показывает 404 — задеплоить функцию; если 000 — чинить сеть. **Если домен не резолвится (NXDOMAIN) — проект удалён, а бандл собран со старым ref: см. «Если проект Supabase пересоздавали или удаляли»** |
 
-Быстрая самопроверка без браузера (функция жива ⇒ не 404):
+Быстрая самопроверка без браузера (функция жива ⇒ не 404). Ожидания по коду
+функций **разные**:
 
 ```bash
+# login-notify: без Authorization обязана вернуть 401 (нет сессии)
 curl -s -o /dev/null -w '%{http_code}\n' -X POST \
   https://<project-ref>.supabase.co/functions/v1/login-notify
-# 401 = задеплоена (нет сессии — так и должно быть без Authorization)
+# 401 = задеплоена и жива
+# 404 = функция не задеплоена
+# 000 = сеть/DNS (или удалённый project-ref)
+
+# login-confirm: 401 не отдаёт НИКОГДА — на пустое тело отвечает 400
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  -H 'Content-Type: application/json' -d '{}' \
+  https://<project-ref>.supabase.co/functions/v1/login-confirm
+# 400 = задеплоена (token and action required)
 # 404 = функция не задеплоена
 ```
 
 Письма от `onboarding@resend.dev` часто падают в спам; если письмо не
 приходит вовсе — почти наверняка `OWNER_NOTIFY_EMAIL` не совпадает с адресом
 аккаунта, в котором создан `RESEND_API_KEY` (см. таблицу выше, строка `resend`).
+
+### Если проект Supabase пересоздавали или удаляли
+
+Симптом: в базе пусто, а прод «работает» с демо-данными. Причина — клиентский
+бандл собран со **старым** ref: домен удалённого проекта не резолвится
+(NXDOMAIN), запросы падают, а `src/data/*` молча уходят на `mockStore`.
+`/admin/login` в такой сборке жалуется на сеть (`errorKind: network`), хотя
+функции просто не задеплоены.
+
+Что реально зашито в прод-бандл:
+
+```bash
+curl -s https://<ваш-домен>/ | grep -o '/assets/[^"]*\.js'          # чанки
+curl -s https://<ваш-домен>/assets/client-*.js | grep -o '[a-z0-9]\{20\}\.supabase\.co'
+# вывод должен совпасть с Settings → General → Reference ID актуального проекта
+```
+
+Порядок починки — все шаги обязательны, иначе ref останется мёртвым:
+
+1. `.env.production` в репозитории: новый `VITE_SUPABASE_URL`,
+   `VITE_SUPABASE_PUBLISHABLE_KEY`, `VITE_SUPABASE_PROJECT_ID` (или
+   `VITE_SUPABASE_ANON_KEY`, если ключ формата `eyJ…`).
+2. Хостинг → Environment Variables (Production **и** Preview): те же `VITE_*`
+   + `VITE_SITE_URL`. Vite отдаёт приоритет `process.env`, поэтому при пустых
+   переменных на Vercel сборка молча берёт значения из `.env.production`.
+3. Redeploy без кэша сборки.
+4. Сверить **фактическую** схему, а не содержимое `supabase/migrations/`:
+   ```sql
+   select version, name from supabase_migrations.schema_migrations order by version;
+   select id, name, public from storage.buckets order by id;
+   select policyname, cmd from pg_policies
+     where schemaname = 'storage' and tablename = 'objects';
+   select tgname from pg_trigger
+     where tgrelid = 'public.admin_requests'::regclass and not tgisinternal;
+   ```
+   Отсутствующие файлы накатывайте по отдельности (`db push` на таком проекте
+   упадёт на `policy already exists` и не даст остальное). Проверить RPC без
+   браузера можно publishable-ключом:
+   ```bash
+   curl -s -X POST https://<ref>.supabase.co/rest/v1/rpc/has_role \
+     -H 'apikey: <publishable-key>' -H 'Content-Type: application/json' \
+     -d '{"uid":"00000000-0000-0000-0000-000000000000","role_to_check":"admin"}'
+   # должно вернуть false (не 404) — значит 00+04 накатаны; анонимный вызов разрешён намеренно
+   ```
+5. Секреты + деплой функций с **тем же** ref — иначе на `functions/v1/login-notify`
+   будет 404 при живом проекте.
+6. Первый админ: `user_roles` пустая → Auth → Users → Add user (Auto Confirm),
+   затем `INSERT` с ролью `owner` (не `admin`), если нужны баннеры — политика
+   `owner manages ads` из `06_ads.sql` требует именно `owner`.
+
+`supabase/.temp/` (ref, pooler-url, кэш версий CLI) — в `.gitignore`, не коммитить.
 
 ### Тесты
 
@@ -281,6 +346,13 @@ npm run test          # smoke data-layer + unit Login Guard / ads / requests
 npm run test:unit     # только unit-auth-notify.mjs
 npm run test:smoke    # только smoke-data-layer.mjs
 ```
+
+Тесты слоя данных проверяют **демо-режим** (mockStore), поэтому Supabase-
+переменные в них принудительно обнуляются через `scripts/lib/demo-mode.mjs`.
+Иначе настроенный `.env` уводил бы тесты в реальную базу: анонимный `INSERT`
+падал бы на RLS, а результат зависел бы от применённых миграций и содержимого
+проекта. `prerender.mjs` / `generate-sitemap.mjs` наоборот работают с реальной
+базой и демо-режим не включают.
 
 ## 7. Если брать встроенный бэкенд Lovable (Cloud), а не свой проект
 
