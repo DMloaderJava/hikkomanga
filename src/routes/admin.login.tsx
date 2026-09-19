@@ -1,6 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { auth } from '@/data/auth';
+import { subscribeLoginChallenge, type LoginChallengeStatus } from '@/data/notify';
+import {
+  loginChallengeUx,
+  WAIT_HINT,
+  type LoginPhase,
+} from '@/lib/loginChallenge';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -20,7 +26,7 @@ export const Route = createFileRoute('/admin/login')({
   component: AdminLoginPage,
 });
 
-type Phase = 'form' | 'waiting' | 'denied' | 'expired' | 'service_error';
+type Phase = LoginPhase;
 
 /** Подсказка владельцу по виду сбоя письма (см. LoginNotifyErrorKind). */
 const OWNER_HINTS: Record<string, string> = {
@@ -59,7 +65,7 @@ function AdminLoginPage() {
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<Phase>('form');
   const [notify, setNotify] = useState<LoginNotifyResult | null>(null);
-  const [pollHint, setPollHint] = useState('Ожидаем подтверждение…');
+  const [pollHint, setPollHint] = useState(WAIT_HINT);
 
   const navigate = useNavigate();
 
@@ -75,6 +81,43 @@ function AdminLoginPage() {
     return false;
   }, [navigate]);
 
+  /**
+   * Единая обработка статуса challenge: первичная проверка, polling и события
+   * localStorage идут через неё, иначе ветки расходятся и экран ожидания
+   * «залипает» на waiting при уже подтверждённом входе.
+   *
+   * `allowErrorScreen` — показывать ли экран «Сервис недоступен». При загрузке
+   * страницы да; во время ожидания нет: один мигающий сбой RPC не должен
+   * останавливать polling и требовать повторного входа.
+   */
+  const applyChallengeStatus = useCallback(
+    async (status: LoginChallengeStatus, opts?: { allowErrorScreen?: boolean }) => {
+      const ux = loginChallengeUx(status);
+
+      if (ux.serviceError && !opts?.allowErrorScreen) {
+        if (ux.hint) setPollHint(ux.hint);
+        return;
+      }
+
+      if (ux.phase) setPhase(ux.phase);
+      if (ux.hint) setPollHint(ux.hint);
+      if (ux.serviceError) {
+        setError(
+          'Сервис подтверждения входа временно недоступен. Попробуйте позже или обратитесь к владельцу.'
+        );
+      }
+      if (ux.signOut) {
+        // denied/expired: сессия не должна пережить отказ.
+        await auth.signOut();
+      }
+      if (ux.openAdmin) {
+        // Локальный approved ≠ доступ: hasRole ещё раз спрашивает сервер.
+        await goAdminIfReady();
+      }
+    },
+    [goAdminIfReady]
+  );
+
   // Если уже подтверждён — сразу в админку. Если challenge pending — экран ожидания.
   useEffect(() => {
     updateMetaTags({ title: 'Вход в админ-панель', noindex: true });
@@ -89,27 +132,43 @@ function AdminLoginPage() {
 
       const status = await auth.getLoginChallengeStatus();
       if (cancelled) return;
-      if (status === 'pending') {
-        setPhase('waiting');
-      } else if (status === 'denied') {
-        setPhase('denied');
-      } else if (status === 'expired') {
-        setPhase('expired');
-      } else if (status === 'error') {
-        setPhase('service_error');
-        setError(
-          'Сервис подтверждения входа временно недоступен. Попробуйте позже или обратитесь к владельцу.'
-        );
-      }
       // status none/approved уже обработан выше; иначе остаёмся на форме
+      await applyChallengeStatus(status, { allowErrorScreen: true });
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [goAdminIfReady]);
+  }, [goAdminIfReady, applyChallengeStatus]);
 
-  // Polling статуса challenge, пока ждём письмо.
+  /**
+   * Реакция на статус в localStorage — главный фикс «залипшего» экрана ожидания.
+   *
+   * Approve/deny пишут `manga_login_challenge` (в т.ч. соседняя вкладка, где
+   * открыли ссылку из письма), а `storage` в текущую вкладку не приходит и
+   * polling может вернуть устаревший серверный `pending`. Подписка закрывает
+   * обе дыры: phase обновляется сразу по факту смены статуса.
+   */
+  useEffect(() => {
+    if (phase !== 'waiting') return;
+    let stopped = false;
+
+    const unsubscribe = subscribeLoginChallenge((challenge) => {
+      // null = запись удалена (signOut/новая сессия): ждать нечего, но и
+      // перебивать уже показанный denied/expired нельзя — статуса нет.
+      if (stopped || !challenge?.status) return;
+      void applyChallengeStatus(challenge.status);
+    });
+
+    return () => {
+      stopped = true;
+      unsubscribe();
+    };
+  }, [phase, applyChallengeStatus]);
+
+  // Polling статуса challenge, пока ждём письмо: единственный путь для
+  // подтверждения с ДРУГОГО устройства (серверный RPC), плюс страховка на
+  // случай, когда событие localStorage не пришло.
   useEffect(() => {
     if (phase !== 'waiting') return;
 
@@ -117,35 +176,27 @@ function AdminLoginPage() {
     const tick = async () => {
       const status = await auth.getLoginChallengeStatus();
       if (stopped) return;
-      if (status === 'approved') {
-        setPollHint('Подтверждено! Открываем админку…');
-        await goAdminIfReady();
-        return;
-      }
-      if (status === 'denied') {
-        setPhase('denied');
-        await auth.signOut();
-        return;
-      }
-      if (status === 'expired') {
-        setPhase('expired');
-        await auth.signOut();
-        return;
-      }
-      if (status === 'error') {
-        setPollHint('Сервис статуса временно недоступен, повторяем…');
-        return;
-      }
-      setPollHint('Ожидаем подтверждение из письма…');
+      await applyChallengeStatus(status);
     };
 
-    tick();
-    const id = window.setInterval(tick, 2500);
+    void tick();
+    const id = window.setInterval(() => void tick(), 2500);
+
+    // Возврат к вкладке: письмо могли подтвердить на телефоне, не ждём тика.
+    const onFocus = () => {
+      if (document.visibilityState && document.visibilityState !== 'visible') return;
+      void tick();
+    };
+    window.addEventListener('focus', onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+
     return () => {
       stopped = true;
       window.clearInterval(id);
+      window.removeEventListener('focus', onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
     };
-  }, [phase, goAdminIfReady]);
+  }, [phase, applyChallengeStatus]);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
