@@ -6,8 +6,8 @@
 //   email?         — опционально: уведомления о решении (Resend, без верификации в v1)
 //   cover          — файл ≤5 MB, jpeg/png/webp, 3:4 ±10%
 //
-// Порядок проверки: капча → rate limit (15/мин, 100/час, 300/сутки по
-// sha256(ip+salt)) → payload → обложка → upload в бакет submissions
+// Порядок проверки: rate limit (15/мин, 100/час, 300/сутки по
+// sha256(ip+salt)) → капча → payload → обложка → upload в бакет submissions
 // (service_role) → INSERT в admin_requests. Вся логика — в _shared/submissionCore.ts
 // (тот же модуль покрывается scripts/unit-submissions.mjs).
 //
@@ -20,6 +20,7 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import { verifyCaptcha } from '../_shared/captcha.ts';
 import {
   processSubmission,
+  pickClientIp,
   type SubmissionDeps,
 } from '../_shared/submissionCore.ts';
 
@@ -79,10 +80,12 @@ Deno.serve(async (req) => {
       ? new Uint8Array(await (cover as File).arrayBuffer())
       : undefined;
 
-  const ip =
-    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    req.headers.get('cf-connecting-ip') ||
-    'unknown';
+  // cf-connecting-ip — приоритет (ставит CF, не подделывается); XFF —
+  // fallback ПОСЛЕДНИМ элементом (первый контролирует клиент → спуфинг).
+  const ip = pickClientIp(
+    req.headers.get('cf-connecting-ip'),
+    req.headers.get('x-forwarded-for')
+  );
 
   const deps: SubmissionDeps = {
     verifyCaptcha,

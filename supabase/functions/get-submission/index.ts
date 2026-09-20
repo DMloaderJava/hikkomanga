@@ -14,6 +14,7 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 import {
   pickSubmissionStatus,
+  pickClientIp,
   canWithdraw,
 } from '../_shared/submissionCore.ts';
 
@@ -63,10 +64,12 @@ Deno.serve(async (req) => {
     return json(400, { ok: false, error: 'token and action=get|withdraw required' });
   }
 
-  const ip =
-    req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    req.headers.get('cf-connecting-ip') ||
-    'unknown';
+  // cf-connecting-ip — приоритет (ставит CF, не подделывается); XFF —
+  // fallback ПОСЛЕДНИМ элементом (первый контролирует клиент → спуфинг).
+  const ip = pickClientIp(
+    req.headers.get('cf-connecting-ip'),
+    req.headers.get('x-forwarded-for')
+  );
 
   const admin = createClient(supabaseUrl, serviceKey, {
     auth: { persistSession: false, autoRefreshToken: false },

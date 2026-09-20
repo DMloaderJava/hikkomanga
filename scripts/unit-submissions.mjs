@@ -10,9 +10,13 @@
  * *.supabase.co закрыт) — деплой edge и проверка капчи/лимитов делаются
  * пользователем по SETUP_SUPABASE.md, раздел «Приём заявок».
  *
- * 10 кейсов по ТЗ:
+ * 10 кейсов по ТЗ + 2 регрессионных блока (ревью перед мержем):
  *   1. капча не прошла → 400, заявки нет;
  *   2. rate limit: 15 ок, 16-я → 429 + Retry-After;
+ *   2*. лимит ДО капчи: 100 запросов с невалидным токеном → после исчерпания
+ *       окна все 429, siteverify вызван 15 раз (не 100);
+ *   2**. pickClientIp: cf-connecting-ip приоритетен, XFF — последний элемент
+ *       (первый контролирует клиент → ротацией XFF лимит не обходится);
  *   3. валидация payload (+ `javascript:`-схемы) → 400 + fieldErrors;
  *   4. обложка: >5MB / GIF / 1:1 → 400;
  *   5. успех → токен, pending, ip_hash = sha256(ip+salt);
@@ -171,6 +175,41 @@ const input = (over = {}) => ({
   check('2c. 16-я → 429 rate_limited', over.status === 429 && over.body.error === 'rate_limited');
   check('2d. Retry-After присутствует', typeof over.retryAfter === 'number' && over.retryAfter > 0, String(over.retryAfter));
   check('2e. 16-я НЕ вставлена', state.inserted.length === 15);
+}
+
+// ── 2*. Rate limit ДО капчи: флуд с невалидным токеном ──────────────────────
+{
+  const { deps, state } = makeDeps();
+  state.captchaOk = false;
+  const statuses = [];
+  for (let i = 0; i < 100; i += 1) {
+    statuses.push((await core.processSubmission(deps, input())).status);
+  }
+  const count400 = statuses.filter((s) => s === 400).length;
+  const count429 = statuses.filter((s) => s === 429).length;
+  // Первые 15 легитимно доходят до капчи и её проваливают (400) — они и
+  // исчерпывают минутное окно. «Все 429» для свежего окна невозможно по
+  // определению: лимит должен быть сначала израсходован.
+  check('2f. первые 15 → 400 captcha_failed (исчерпали окно)', count400 === 15, `400×${count400}`);
+  check('2g. остальные 85 из 100 → ВСЕ 429', count429 === 85, `429×${count429}`);
+  check('2h. siteverify вызван 15 раз, а не 100', state.captchaCalls === 15, `calls=${state.captchaCalls}`);
+  check('2i. ни одна флуд-заявка не вставлена', state.inserted.length === 0);
+
+  // Порядок «лимит → капча» для валидного окна не ломает капчу-ошибки:
+  const { deps: deps2, state: state2 } = makeDeps();
+  const noToken = await core.processSubmission(deps2, input({ captchaToken: undefined }));
+  check('2j. без токена капчи → 400 captcha_missing (после лимита)', noToken.status === 400 && noToken.body.error === 'captcha_missing');
+  check('2k. запрос без токена тоже израсходовал окно', state2.windows.get(60)?.count === 1);
+}
+
+// ── 2**. pickClientIp: спуфинг XFF не обходится ─────────────────────────────
+{
+  check('2l. cf-connecting-ip приоритетнее XFF', core.pickClientIp('198.51.100.5', '1.2.3.4, 198.51.100.5') === '198.51.100.5');
+  check('2m. без cf — ПОСЛЕДНИЙ элемент XFF (реальный IP от CF)', core.pickClientIp(null, '6.6.6.6, 203.0.113.9') === '203.0.113.9');
+  check('2n. спуфинг первого элемента XFF игнорируется', core.pickClientIp(null, '1.2.3.4, 203.0.113.9') === '203.0.113.9');
+  check('2o. один элемент XFF — он и берётся', core.pickClientIp(null, '203.0.113.9') === '203.0.113.9');
+  check('2p. нет заголовков → unknown (fail-closed, общий бакет)', core.pickClientIp(null, null) === 'unknown');
+  check('2q. пробелы по краям элемента обрезаются', core.pickClientIp(null, '  a.b.c.d ,  203.0.113.9  ') === '203.0.113.9');
 }
 
 // ── 3. Валидация payload (+ javascript:-схемы) ──────────────────────────────

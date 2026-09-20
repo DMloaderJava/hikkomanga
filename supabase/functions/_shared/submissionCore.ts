@@ -304,11 +304,33 @@ export async function hashIp(ip: string, salt: string): Promise<string> {
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/**
+ * Клиентский IP для rate limit и ip_hash.
+ *
+ * cf-connecting-ip ставит Cloudflare на входе — клиенту недоступен, приоритет.
+ * X-FORWARDED-FOR — только fallback: CF ДОПИСЫВАЕТ реальный IP в КОНЕЦ
+ * цепочки, а первый элемент контролирует сам клиент. Берём последний элемент;
+ * иначе лимит обходится ротацией «X-FORWARDED-FOR: <случайный IP>».
+ */
+export function pickClientIp(
+  cfConnectingIp: string | null | undefined,
+  xForwardedFor: string | null | undefined
+): string {
+  const cf = cfConnectingIp?.trim();
+  if (cf) return cf;
+  const last = xForwardedFor?.split(',').pop()?.trim();
+  if (last) return last;
+  return 'unknown';
+}
+
 // ── Оркестрация ──────────────────────────────────────────────────────────────
 
 /**
  * Полный флоу submit-title с подставляемыми зависимостями.
- * Порядок: капча → rate limit → payload → обложка → upload → insert.
+ * Порядок: rate limit → капча → payload → обложка → upload → insert.
+ * Лимит ПЕРЕД капчей: иначе бот без валидного токена дёргает siteverify
+ * и функцию без ограничений (невалидные запросы окно расходуют — флуд
+ * упирается в 429, а не в Turnstile).
  * Ошибки капчи = 400 error=captcha_missing|captcha_failed (по ТЗ:
  * «captcha-фейл → 400 без заявки»; 403 зарезервирован), лимиты = 429 +
  * Retry-After, данные = 400 с fieldErrors.
@@ -319,16 +341,9 @@ export async function processSubmission(
 ): Promise<SubmissionResult> {
   const token = (deps.randomToken ?? randomToken)();
 
-  // 1. Капча (без токена или непрошедшая → 400, заявка не создаётся)
-  if (!input.captchaToken) {
-    return { status: 400, body: { ok: false, error: 'captcha_missing' } };
-  }
-  const captcha = await deps.verifyCaptcha(input.captchaToken, input.ip);
-  if (!captcha.ok) {
-    return { status: 400, body: { ok: false, error: 'captcha_failed', detail: captcha.error } };
-  }
-
-  // 2. Rate limit: три окна; любой false → 429
+  // 1. Rate limit ДО капчи: три окна; любой false → 429.
+  //    Запросы с невалидной капчей окно расходуют — флуд без токена
+  //    ограничивается тем же способом, что и валидный трафик.
   for (const { windowSeconds, limit } of RATE_LIMITS) {
     const allowed = await deps.checkLimit(windowSeconds, limit);
     if (!allowed) {
@@ -342,6 +357,15 @@ export async function processSubmission(
         retryAfter: windowSeconds <= 60 ? 60 : Math.min(windowSeconds, 3600),
       };
     }
+  }
+
+  // 2. Капча (без токена или непрошедшая → 400, заявка не создаётся)
+  if (!input.captchaToken) {
+    return { status: 400, body: { ok: false, error: 'captcha_missing' } };
+  }
+  const captcha = await deps.verifyCaptcha(input.captchaToken, input.ip);
+  if (!captcha.ok) {
+    return { status: 400, body: { ok: false, error: 'captcha_failed', detail: captcha.error } };
   }
 
   // 3. Payload
