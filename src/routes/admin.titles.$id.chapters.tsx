@@ -19,12 +19,14 @@ import {
 import type { Title, Chapter, ChapterInput } from '@/data/types';
 import { formatChapterNumber, formatDate } from '@/lib/format';
 import { auth } from '@/data/auth';
+import { assertEntityId } from '@/lib/routeParams';
 
 export const Route = createFileRoute('/admin/titles/$id/chapters')({
   loader: async ({ params }) => {
+    const titleId = assertEntityId(params.id, 'тайтл');
     const [titleData, chapterList] = await Promise.all([
-      titlesApi.getById(params.id),
-      chaptersApi.listByTitle(params.id, true),
+      titlesApi.getById(titleId),
+      chaptersApi.listByTitle(titleId, true),
     ]);
     if (!titleData) throw new Error('Тайтл не найден');
     // isOwner в loader — без мерцания UI admin ↔ owner.

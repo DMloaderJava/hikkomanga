@@ -11,13 +11,18 @@ import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import type { Title, Chapter, Page, ChapterInput } from '@/data/types';
 import { ArrowLeft, FileImage, Layers, AlertCircle } from 'lucide-react';
 import { formatChapterNumber } from '@/lib/format';
+import { assertEntityId } from '@/lib/routeParams';
 
 export const Route = createFileRoute('/admin/titles/$id/chapters/$cid')({
   loader: async ({ params }) => {
+    // Битая ссылка (Link без params) не должна превращаться в 400 от PostgREST
+    // и невнятное «Тайтл не найден» — см. src/lib/routeParams.ts.
+    const titleId = assertEntityId(params.id, 'тайтл');
+    const chapterId = assertEntityId(params.cid, 'глава');
     const [titleData, chapterData, pageList] = await Promise.all([
-      titlesApi.getById(params.id),
-      chaptersApi.getById(params.cid),
-      pagesApi.listByChapter(params.cid),
+      titlesApi.getById(titleId),
+      chaptersApi.getById(chapterId),
+      pagesApi.listByChapter(chapterId),
     ]);
     if (!titleData || !chapterData) throw new Error('Глава или тайтл не найдены');
     return { title: titleData, chapter: chapterData, pages: pageList };

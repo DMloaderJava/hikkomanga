@@ -6,11 +6,13 @@ import { TitleForm } from '@/components/admin/TitleForm';
 import type { Title, TitleInput, Genre } from '@/data/types';
 import { ArrowLeft, Edit, Layers } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { assertEntityId } from '@/lib/routeParams';
 
 export const Route = createFileRoute('/admin/titles/$id/')({
   loader: async ({ params }) => {
+    const titleId = assertEntityId(params.id, 'тайтл');
     const [titleData, allGenres] = await Promise.all([
-      titlesApi.getById(params.id),
+      titlesApi.getById(titleId),
       genresApi.list(),
     ]);
     if (!titleData) throw new Error('Тайтл не найден');
