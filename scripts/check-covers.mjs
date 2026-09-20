@@ -1,27 +1,33 @@
 #!/usr/bin/env node
 /**
- * Диагностика обложек тайтлов (и опционально страниц глав) на живой базе.
+ * Диагностика обложек тайтлов.
  *
  *   node scripts/check-covers.mjs [опции]
  *
  * Опции:
- *   --limit N     сколько тайтлов проверять (по умолчанию 100)
- *   --pages       дополнительно проверить страницы глав (pages.image_url, до 30)
- *   --timeout ms  таймаут одного запроса (по умолчанию 10000)
+ *   --limit N     сколько тайтлов проверять (по умолчанию 200)
+ *   --timeout ms  таймаут запроса списка (по умолчанию 10000)
  *   --json        вывести итог JSON-ом (для CI)
  *
- * Переменные берутся как при сборке: .env / .env.production + process.env
- * (VITE_SUPABASE_URL + ключ). Анонимного ключа достаточно: RLS отдаёт только
- * опубликованные тайтлы — именно их и видят читатели.
+ * Обложки — файлы репозитория (public/media/covers/), в titles.cover_url —
+ * относительный путь вида /media/covers/{slug}.webp. Сети нет: для каждого
+ * cover_url из БД проверяется, что:
+ *   1) путь относительный (начинается с /) — внешние/http(s) URL больше не
+ *      поддерживаются и помечаются проблемой;
+ *   2) файл существует в public/<путь>;
+ *   3) формат — WebP (расширение .webp).
  *
- * Проверяется каждый cover_url / image_url:
- *   пустой | data:URL | локальный /media | Supabase Storage | внешний домен (CSP его режет!)
- * Доступные по сети URL пробуются HEAD-запросом (fallback GET+Range, если 405).
+ * Переменные те же, что при сборке: .env / .env.production + process.env
+ * (VITE_SUPABASE_URL + ключ). RLS отдаёт только опубликованные тайтлы —
+ * именно их видят читатели.
  *
  * Коды выхода:
- *   0 — битых нет; 1 — есть битые URL; 2 — проверка не состоялась
- *   (не заданы переменные Supabase или база/сеть недоступны целиком).
+ *   0 — все обложки найдены в public/;
+ *   1 — есть битые (файла нет / путь не относительный / не .webp / пусто);
+ *   2 — сама БД недоступна (переменные не заданы или сеть/RLS).
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { buildEnv } from './lib/urls.mjs';
 
 const args = process.argv.slice(2);
@@ -31,14 +37,12 @@ const numArg = (name, def) => {
   return i >= 0 && Number.isFinite(Number(args[i + 1])) ? Number(args[i + 1]) : def;
 };
 
-const LIMIT = Math.max(1, numArg('--limit', 100));
-const PAGES_LIMIT = 30;
-const CHECK_PAGES = flag('--pages');
+const LIMIT = Math.max(1, numArg('--limit', 200));
 const TIMEOUT_MS = Math.max(1000, numArg('--timeout', 10000));
 const AS_JSON = flag('--json');
 
-/** Хосты, которые пропускает CSP продакшена (vercel.json → img-src). */
-const CSP_HOST_SUFFIXES = ['.supabase.co', '.supabase.in'];
+const PUBLIC_DIR = path.resolve(process.cwd(), 'public');
+const COVERS_DIR = path.join(PUBLIC_DIR, 'media/covers');
 
 const env = buildEnv();
 const rawUrl = (env.VITE_SUPABASE_URL || '').trim().replace(/\/+$/, '');
@@ -48,200 +52,127 @@ const anonKey =
   env.VITE_SUPABASE_PUBLIC_KEY ||
   '';
 
-const out = (...a) => (AS_JSON ? null : console.log(...a));
+const result = { checked: 0, ok: 0, problems: [], items: [] };
+const checkCoverPath = (urlValue) => {
+  result.checked += 1;
+  const value = typeof urlValue === 'string' ? urlValue.trim() : '';
 
-/** Классификация URL без сети. */
-function classify(rawUrlValue) {
-  const value = typeof rawUrlValue === 'string' ? rawUrlValue.trim() : '';
-  if (!value) return { kind: 'empty', label: 'ПУСТО' };
-  if (value.startsWith('data:')) return { kind: 'data', label: 'DATA-URL' };
-  if (/^https?:\/\//i.test(value)) {
-    let host = '';
-    try {
-      host = new URL(value).host.toLowerCase();
-    } catch {
-      return { kind: 'malformed', label: 'БИТЫЙ-URL' };
+  const problem = (verdict, note) => {
+    result.problems.push({ url: value || '(пусто)', verdict, note });
+    result.items.push({ url: value || '', verdict, ok: false });
+  };
+  const fine = () => {
+    result.ok += 1;
+    result.items.push({ url: value, verdict: 'OK', ok: true });
+  };
+
+  if (!value) return problem('EMPTY', 'обложка не задана — будет плейсхолдер');
+  if (!value.startsWith('/')) {
+    return problem(
+      /^https?:\/\//i.test(value) ? 'EXTERNAL' : 'MALFORMED',
+      'обложки хранятся в репозитории: путь должен начинаться с / (например /media/covers/slug.webp)'
+    );
+  }
+  if (!value.toLowerCase().endsWith('.webp')) {
+    return problem('FORMAT', 'ожидается .webp (сид-обложки генерируются в WebP 800px)');
+  }
+
+  const filePath = path.join(PUBLIC_DIR, value.replace(/^\/+/, ''));
+  if (!filePath.startsWith(COVERS_DIR + path.sep) && filePath !== path.join(PUBLIC_DIR, value.slice(1))) {
+    // Путь вне media/covers допустим (например /media/...), но не вне public/.
+    if (!filePath.startsWith(PUBLIC_DIR + path.sep)) {
+      return problem('ESCAPE', 'путь выходит за пределы public/');
     }
-    if (value.startsWith('http://')) return { kind: 'insecure', label: 'HTTP(небезопасно)', host };
-    if (CSP_HOST_SUFFIXES.some((s) => host.endsWith(s))) return { kind: 'supabase', label: 'SUPABASE', host };
-    return { kind: 'external', label: 'ВНЕШНИЙ(CSP-режет)', host };
   }
-  if (value.startsWith('/')) return { kind: 'local', label: 'ЛОКАЛЬНЫЙ' };
-  // Голый путь бакета без схемы — storage.ts так не пишет, но в БД может лежать.
-  return { kind: 'bare-path', label: 'ПУТЬ-БЕЗ-СХЕМЫ' };
-}
 
-/** HEAD → статус; при 405 — GET с Range: bytes=0-0. Возвращает { status, type, size } */
-async function probe(urlValue) {
-  const doFetch = (method, extraHeaders) =>
-    fetch(urlValue, {
-      method,
-      headers: { apikey: anonKey, ...extraHeaders },
-      redirect: 'follow',
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-
-  try {
-    let res = await doFetch('HEAD');
-    if (res.status === 405 || res.status === 501) {
-      res = await doFetch('GET', { Range: 'bytes=0-0' });
-    }
-    const type = res.headers.get('content-type') || '';
-    const lenHeader = res.headers.get('content-length');
-    const range = res.headers.get('content-range'); // "bytes 0-0/12345"
-    const size = range ? Number(range.split('/')[1]) : lenHeader ? Number(lenHeader) : null;
-    return { status: res.status, type, size: Number.isFinite(size) ? size : null };
-  } catch (e) {
-    return { status: 0, error: e?.message || String(e) };
+  if (!fs.existsSync(filePath)) {
+    return problem('MISSING', `файла нет: ${path.relative(process.cwd(), filePath)}`);
   }
-}
-
-async function fetchRows(table, select, limit) {
-  const qs = new URLSearchParams({ select, limit: String(limit) });
-  try {
-    const res = await fetch(`${rawUrl}/rest/v1/${table}?${qs}`, {
-      headers: { apikey: anonKey, Accept: 'application/json' },
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-    if (!res.ok) return { error: `HTTP ${res.status}: ${(await res.text()).slice(0, 200)}` };
-    return { rows: await res.json() };
-  } catch (e) {
-    return { error: e?.message || String(e) };
-  }
-}
-
-function shortUrl(u, max = 64) {
-  return u.length > max ? `${u.slice(0, max - 1)}…` : u;
-}
+  return fine();
+};
 
 // ── Основной поток ───────────────────────────────────────────────────────────
 
-if (!rawUrl || !anonKey) {
-  console.error(
-    'check-covers: VITE_SUPABASE_URL / ключ не заданы — проверять нечего.\n' +
-      'Задайте их в .env или окружении CI (как для сборки, см. SETUP_SUPABASE.md §1).'
-  );
-  process.exit(2);
+async function fetchTitles() {
+  if (!rawUrl || !anonKey) {
+    console.error(
+      'check-covers: VITE_SUPABASE_URL / ключ не заданы — список тайтлов взять неоткуда.\n' +
+        'Задайте их в .env или окружении CI (как для сборки, см. SETUP_SUPABASE.md §1).'
+    );
+    process.exit(2);
+  }
+  const qs = new URLSearchParams({ select: 'id,slug,cover_url', limit: String(LIMIT) });
+  try {
+    const res = await fetch(`${rawUrl}/rest/v1/titles?${qs}`, {
+      headers: { apikey: anonKey, Accept: 'application/json' },
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      console.error(`check-covers: titles → HTTP ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      process.exit(2);
+    }
+    return (await res.json());
+  } catch (e) {
+    console.error(`check-covers: БД недоступна (${e?.message || e}). Данные не оценены.`);
+    process.exit(2);
+  }
 }
 
-out(`\n=== Проверка обложек тайтлов (${rawUrl}) ===\n`);
-out('slug'.padEnd(32), 'ТИП'.padEnd(20), 'СТАТУС'.padEnd(9), 'TYPE/SIZE'.padEnd(22), 'URL');
-out('-'.repeat(140));
+const titles = await fetchTitles();
 
-const result = { checked: 0, problems: [], skipped: 0, unreachableAll: true, items: [] };
-/** Проблемы, из-за которых проверка не состоялась (сеть/доступ), а не битые данные. */
-let infraFailures = 0;
+if (!AS_JSON) {
+  console.log(`\n=== Проверка обложек (${rawUrl}) ===\n`);
+  console.log('Каталог файлов:', path.relative(process.cwd(), COVERS_DIR) + '/');
+  console.log('slug'.padEnd(34), 'ПУТЬ', ' '.repeat(8), 'СТАТУС');
+  console.log('-'.repeat(90));
+}
 
-async function checkRow(kind, slugOrId, urlValue) {
-  result.checked += 1;
-  const c = classify(urlValue);
-  let status = '-';
-  let extra = '';
-  let verdict = 'OK';
-
-  if (c.kind === 'empty') {
-    verdict = 'SKIP';
-    result.skipped += 1;
-  } else if (c.kind === 'data') {
-    verdict = 'WARN';
-    extra = 'демо-данные в реальной базе?';
-    result.problems.push({ kind, slug: slugOrId, url: shortUrl(urlValue, 120), verdict, note: extra });
-  } else if (c.kind === 'bare-path' || c.kind === 'malformed') {
-    verdict = 'BROKEN';
-    infraFailures += 0; // это битые данные, а не сеть
-    result.problems.push({ kind, slug: slugOrId, url: shortUrl(urlValue, 120), verdict, note: 'не является URL' });
-  } else if (c.kind === 'insecure' || c.kind === 'external') {
-    verdict = c.kind === 'insecure' ? 'BROKEN' : 'BLOCKED';
-    extra = 'CSP img-src пропускает только Supabase Storage';
-    result.problems.push({ kind, slug: slugOrId, url: shortUrl(urlValue, 120), verdict, note: extra });
-  } else {
-    // supabase | local — проверяем по сети
-    const probeUrl = c.kind === 'local' ? `${(env.VITE_SITE_URL || '').replace(/\/+$/, '')}${urlValue}` : urlValue;
-    if (c.kind === 'local' && !env.VITE_SITE_URL) {
-      verdict = 'SKIP';
-      result.skipped += 1;
-      extra = 'VITE_SITE_URL не задан — локальный путь не проверить';
-    } else {
-      const p = await probe(probeUrl);
-      if (p.status === 0) {
-        verdict = 'NETWORK';
-        extra = p.error;
-        result.unreachableAll = false;
-        result.problems.push({ kind, slug: slugOrId, url: shortUrl(probeUrl, 120), verdict, note: p.error });
-      } else if (p.status >= 200 && p.status < 300) {
-        verdict = 'OK';
-        extra = `${p.type || '?'}${p.size != null ? ` / ${p.size} B` : ''}`;
-      } else {
-        verdict = 'BROKEN';
-        extra = `HTTP ${p.status}`;
-        result.problems.push({ kind, slug: slugOrId, url: shortUrl(probeUrl, 120), verdict, note: extra });
-      }
-      status = String(p.status);
-    }
-  }
-
+for (const t of titles) {
+  const before = result.problems.length;
+  checkCoverPath(t.cover_url);
+  const last = result.problems[result.problems.length - 1];
+  const bad = result.problems.length > before;
   if (!AS_JSON) {
     console.log(
-      slugOrId.padEnd(32),
-      c.label.padEnd(20),
-      verdict.padEnd(9),
-      `${status} ${extra}`.slice(0, 21).padEnd(22),
-      shortUrl(String(urlValue || '—'))
+      (t.slug || t.id).padEnd(34),
+      (t.cover_url || '—').slice(0, 44).padEnd(50),
+      bad ? `✗ ${last.verdict}: ${last.note}` : '✓'
     );
   }
-  result.items.push({ kind, slug: slugOrId, kindLabel: c.label, verdict, status, url: String(urlValue || '') });
 }
 
-const titlesRes = await fetchRows('titles', 'id,slug,title,cover_url', LIMIT);
-if (titlesRes.error) {
-  console.error(`\ncheck-covers: не удалось получить titles — ${titlesRes.error}`);
-  console.error('Проверка не состоялась: сеть/DNS/RLS. Прод-данные не оценены.');
-  process.exit(2);
-}
-
-for (const t of titlesRes.rows) {
-  await checkRow('cover', t.slug || t.id, t.cover_url);
-}
-
-if (CHECK_PAGES) {
-  out(`\n=== Страницы глав (pages.image_url, до ${PAGES_LIMIT}) ===\n`);
-  const pagesRes = await fetchRows('pages', 'id,chapter_id,image_url', PAGES_LIMIT);
-  if (pagesRes.error) {
-    out(`  пропущено: ${pagesRes.error}`);
+// Бонус без БД: сид-файлы, на которые ссылается mockStore, тоже должны существовать.
+if (!AS_JSON) {
+  console.log('\nСид-обложки (mockStore):');
+  const seedDir = COVERS_DIR;
+  if (fs.existsSync(seedDir)) {
+    const files = fs.readdirSync(seedDir).filter((f) => f.endsWith('.webp'));
+    for (const f of files) {
+      const size = fs.statSync(path.join(seedDir, f)).size;
+      console.log('  ✓', f.padEnd(44), `${(size / 1024).toFixed(1)} kB`);
+    }
+    if (files.length === 0) console.log('  (пусто — запустите scripts/generate-seed-covers.mjs)');
   } else {
-    for (const p of pagesRes.rows) await checkRow('page', p.chapter_id || p.id, p.image_url);
+    console.log('  ✗ каталог public/media/covers/ не существует');
   }
-}
-
-out(
-  `\nИтог: проверено ${result.checked}, без обложки ${result.skipped}, ` +
-    `проблем ${result.problems.length}.`
-);
-if (result.problems.length) {
-  out('\nПроблемные URL:');
-  for (const p of result.problems) out(`  [${p.verdict}] ${p.slug}: ${p.url} — ${p.note || ''}`);
 }
 
 if (AS_JSON) {
-  console.log(JSON.stringify({ ...result, infraFailures }, null, 2));
+  console.log(JSON.stringify(result, null, 2));
 } else {
-  out(
-    result.problems.length === 0
-      ? '\nOK — все обложки доступны.\n'
-      : `\nПРОБЛЕМ: ${result.problems.length}\n`
+  console.log(
+    `\nИтог: проверено ${result.checked}, найдено в public/ ${result.ok}, проблем ${result.problems.length}.`
   );
+  if (result.problems.length) {
+    console.log('\nПроблемы:');
+    for (const p of result.problems) console.log(`  [${p.verdict}] ${p.url} — ${p.note}`);
+    console.log(
+      '\nЧинится так: положите WebP-файл в public/media/covers/ и укажите путь ' +
+        '/media/covers/{имя}.webp в админке (TitleForm). Сгенерировать сид-обложки: ' +
+        'npm i --no-save sharp && node scripts/generate-seed-covers.mjs'
+    );
+  }
+  console.log(result.problems.length === 0 ? '\nOK — все обложки на месте.\n' : `\nПРОБЛЕМ: ${result.problems.length}\n`);
 }
 
-// Битые/внешние URL — ошибка данных (exit 1). Повальная NETWORK-недоступность
-// (среда без выхода к Supabase) — ошибка окружения (exit 2), не данных.
-const dataProblems = result.problems.filter((p) => p.verdict !== 'NETWORK');
-const onlyNetwork =
-  result.problems.length > 0 && dataProblems.length === 0;
-if (onlyNetwork) {
-  console.error(
-    '\ncheck-covers: до Storage не достучаться ни по одному URL (сеть/DNS/файрвол). ' +
-      'Доступность данных в этой среде оценить нельзя.'
-  );
-  process.exit(2);
-}
 process.exit(result.problems.length ? 1 : 0);

@@ -1,7 +1,6 @@
 import { getSupabase, isSupabaseConfigured } from './client';
 import { mockStore } from './mockStore';
 import { chapters as chaptersApi } from './chapters';
-import { storage } from './storage';
 import { normalizeMediaUrl } from '@/lib/storageUrl';
 import { type Title, type TitleInput, type Genre, SlugConflictError } from './types';
 
@@ -226,6 +225,7 @@ export const titles = {
 
     // Строки глав/страниц в БД удалятся каскадно по внешним ключам, а вот
     // файлы в Storage и озвучки — нет, поэтому чистим их явно до удаления тайтла.
+    // Обложка — файл в репозитории (public/media/covers/), её удалять не нужно.
     const titleChapters = await chaptersApi.listByTitle(id, true);
     for (const chapter of titleChapters) {
       try {
@@ -233,12 +233,6 @@ export const titles = {
       } catch (e) {
         console.warn(`[titles] глава ${chapter.id} очищена не полностью:`, e);
       }
-    }
-
-    try {
-      await storage.deleteCover(titleToDelete.cover_url);
-    } catch (e) {
-      console.warn('[titles] не удалось удалить файл обложки:', e);
     }
 
     if (isSupabaseConfigured) {

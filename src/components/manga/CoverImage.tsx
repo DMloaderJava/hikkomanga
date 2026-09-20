@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { coverSrcSet } from '@/lib/storageUrl';
 
 interface CoverImageProps {
-  /** URL обложки. Если пустой или запрос не удался — показывается fallback. */
+  /** URL/путь обложки. Если пустой или запрос не удался — показывается fallback. */
   src?: string | null;
   /** Название тайтла — для alt и подсказки при диагностике. */
   title: string;
@@ -33,22 +32,23 @@ const DEV = import.meta.env?.DEV;
  * (диагностика через data-cover-error в DOM) + счётчик в Vercel Analytics.
  * Динамический импорт: в бандл попадает только при реальном сбое.
  */
-function reportCoverError(title: string, src: string, stage: string) {
+function reportCoverError(title: string, src: string) {
   if (DEV) {
-    console.warn(`[cover] failed (${stage}) «${title}»:`, src);
+    console.warn(`[cover] failed «${title}»:`, src);
     return;
   }
   import('@vercel/analytics')
-    .then(({ track }) => track('cover_error', { title, stage }))
+    .then(({ track }) => track('cover_error', { title }))
     .catch(() => {});
 }
 
 /**
  * Единая точка рендера обложки тайтла — «никогда не битая картинка»:
  *
- *  1. src + srcset (если включены Supabase-трансформации) →
- *  2. повтор чистым src (трансформации недоступны / кандидат битый) →
- *  3. плейсхолдер `/media/placeholder-cover.svg` + `data-cover-error`.
+ *  1. src — обложки лежат в репозитории (public/media/covers/*.webp),
+ *     в titles.cover_url — относительный путь /media/covers/{slug}.webp;
+ *  2. при ошибке загрузки (файла нет, опечатка в пути) — плейсхолдер
+ *     `/media/placeholder-cover.svg` + `data-cover-error` в DOM.
  *
  * При пустом src сразу плейсхолдер. SSR-safe: на этапе пререндера window не
  * нужен, onError на сервере не срабатывает, атрибуты детерминированы.
@@ -63,34 +63,18 @@ export function CoverImage({
   priority = false,
 }: CoverImageProps) {
   const resolvedLoading = loading ?? (priority ? 'eager' : 'lazy');
-  /** first = src(+srcset), retry = чистый src, placeholder = файл-плейсхолдер. */
-  const [attempt, setAttempt] = useState<'first' | 'retry' | 'placeholder'>(() =>
-    src ? 'first' : 'placeholder'
-  );
+  const [failed, setFailed] = useState(false);
 
   // Смена обложки (редактирование тайтла, другой результат поиска) — новая попытка.
   useEffect(() => {
-    setAttempt(src ? 'first' : 'placeholder');
+    setFailed(false);
   }, [src]);
 
-  const srcSet = useMemo(() => (attempt === 'first' ? coverSrcSet(src) : undefined), [src, attempt]);
   const placeholderSrc = `${import.meta.env?.BASE_URL ?? '/'}media/placeholder-cover.svg`;
   const imgClassName = className ?? 'h-full w-full object-cover';
   const resolvedAlt = alt ?? `Обложка: ${title}`;
 
-  const handleError = () => {
-    if (attempt === 'first' && srcSet) {
-      // Кандидат трансформации не загрузился — пробуем оригинал, не «хороним» обложку.
-      setAttempt('retry');
-      return;
-    }
-    if (src && attempt !== 'placeholder') {
-      reportCoverError(title, src, srcSet ? 'retry' : 'first');
-    }
-    setAttempt('placeholder');
-  };
-
-  if (attempt === 'placeholder') {
+  if (!src || failed) {
     if (fallback) return <>{fallback}</>;
     return (
       <img
@@ -107,18 +91,17 @@ export function CoverImage({
 
   return (
     <img
-      key={`${attempt}-${src ?? ''}`}
-      src={src ?? undefined}
-      srcSet={srcSet}
-      // sizes: контейнер карточки ≤ 300px, страница тайтла — до 400px.
-      sizes={srcSet ? '(max-width: 640px) 50vw, 300px' : undefined}
+      src={src}
       alt={resolvedAlt}
       loading={priority ? 'eager' : resolvedLoading}
       decoding="async"
       fetchPriority={priority ? 'high' : undefined}
       className={imgClassName}
       draggable={false}
-      onError={handleError}
+      onError={() => {
+        reportCoverError(title, src);
+        setFailed(true);
+      }}
     />
   );
 }

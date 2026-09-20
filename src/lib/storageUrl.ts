@@ -4,11 +4,15 @@ import { SUPABASE_URL } from '@/integrations/supabase/config';
  * Единое место работы с URL медиа (обложки, страницы глав, озвучка).
  *
  * Здесь и только здесь:
- *  - чинятся ссылки на удалённые («мёртвые») Supabase-проекты;
- *  - собирается публичный URL Storage из пути бакета;
- *  - нормализуются значения из БД/форм (trim, '' → null, http → https);
+ *  - чинятся ссылки на удалённые («мёртвые») Supabase-проекты (pages/voiceovers);
+ *  - собирается публичный URL Supabase Storage из пути бакета (pages/voiceovers);
+ *  - нормализуются значения из БД/форм (trim, '' → null, http → https,
+ *    относительные пути обложек — без изменений);
  *  - извлекается путь объекта из публичного URL (для удаления из бакета);
  *  - решается, какой URL CSP продакшена считает допустимым.
+ *
+ * Обложки тайтлов — НЕ Storage: это файлы репозитория (public/media/covers/),
+ * в titles.cover_url лежит относительный путь /media/covers/{slug}.webp.
  *
  * Разброс этой логики по модулям — проверенный способ получить «каталог без
  * картинок» после переезда Supabase-проекта: см. SETUP_SUPABASE.md,
@@ -79,16 +83,23 @@ export function repairSupabaseUrl(url: string | null | undefined): string | null
 /**
  * Нормализованное значение медиа-поля из БД/формы:
  *  - пробелы по краям срезаются, пустая строка → null;
+ *  - относительные пути (`/media/covers/x.webp`, формат обложек тайтлов)
+ *    возвращаются КАК ЕСТЬ: их не чинят, не апгрейдят до https и не прогоняют
+ *    через dead-refs — они указывают на файлы этого же репозитория;
  *  - `http://` повышается до `https://` (иначе CSP img-src режет смешанный
  *    контент, а картинка молча не грузится);
- *  - ссылки на мёртвые Supabase-проекты переадресуются на текущий (repairSupabaseUrl);
- *  - data:-URL, локальные `/media/...` и голые пути бакета проходят как есть
- *    (голый путь — это формат `original_url` в pages, он хранится специально).
+ *  - ссылки на мёртвые Supabase-проекты переадресуются на текущий (repairSupabaseUrl)
+ *    — актуально для страниц глав и озвучек, которые живут в Supabase Storage;
+ *  - data:-URL и голые пути бакета проходят как есть
+ *    (голый путь — формат `original_url` в pages, он хранится специально).
  */
 export function normalizeMediaUrl(value: string | null | undefined): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   if (!trimmed) return null;
+
+  // Обложки — локальные файлы репозитория; любой `/...` не трогаем.
+  if (trimmed.startsWith('/')) return trimmed;
 
   const upgraded = /^http:\/\//i.test(trimmed) ? `https://${trimmed.slice(7)}` : trimmed;
 
@@ -132,6 +143,8 @@ export function storagePathFromUrl(
  * 'self' (относительные пути), data:, blob:, *.supabase.co, *.supabase.in.
  * Всё остальное (внешние CDN, чужие хостинги) браузер молча не загрузит —
  * такие URL нужно отклонять в форме, а не находить по битым картинкам.
+ * Обложки теперь 'self' (/media/covers/), поэтому проверка актуальна как
+ * защита от опечаток в ручном пути и от случайных внешних ссылок.
  */
 export function isMediaUrlCspAllowed(
   url: string | null | undefined,
@@ -154,30 +167,4 @@ export function isMediaUrlCspAllowed(
   } catch {
     return false;
   }
-}
-
-/**
- * Srcset обложки через Supabase Image Transformation (рендер-эндпоинт
- * `/storage/v1/image/public/...`). По умолчанию ВЫКЛЮЧЕН: трансформации
- * нужно включать на проекте Supabase (план Pro), иначе эндпоинт отвечает
- * ошибкой и браузер делал бы лишний запрос на каждую карточку.
- * Включение: VITE_COVER_TRANSFORMS=1 при сборке. CoverImage при ошибке
- * srcset-кандидата сам откатывается на оригинальный src (двухступенчатый
- * фолбэк), так что включение безопасно даже на плане без трансформаций.
- */
-export function coverSrcSet(url: string | null | undefined): string | undefined {
-  if (!url || typeof url !== 'string' || !url.includes('/storage/v1/object/public/')) {
-    return undefined;
-  }
-  const transformsOn = import.meta.env?.VITE_COVER_TRANSFORMS === '1';
-  if (!transformsOn) return undefined;
-
-  const renderUrl = url.replace('/storage/v1/object/public/', '/storage/v1/image/public/');
-  if (renderUrl === url) return undefined;
-
-  const sep = renderUrl.includes('?') ? '&' : '?';
-  return [
-    `${renderUrl}${sep}width=400&quality=70&format=webp 400w`,
-    `${renderUrl}${sep}width=800&quality=75&format=webp 800w`,
-  ].join(', ');
 }

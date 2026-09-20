@@ -32,11 +32,12 @@ try {
   // Сиды на месте
   check('сиды: три тайтла', (await titles.listAll()).length === 3);
 
-  // Обложки сидов — сгенерированные SVG data URL (без чужих файлов и сети)
+  // Обложки сидов — файлы репозитория: /media/covers/{slug}.webp
+  // (генерируются scripts/generate-seed-covers.mjs, лежат в public/media/covers/).
   const seeded = await titles.listAll();
   check(
-    'обложки сидов — SVG data URL',
-    seeded.every((t) => t.cover_url?.startsWith('data:image/svg+xml'))
+    'обложки сидов — пути /media/covers/*.webp',
+    seeded.every((t) => t.cover_url?.startsWith('/media/covers/') && t.cover_url?.endsWith('.webp'))
   );
 
   // Создание тайтла + конфликт slug

@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import type { Title, Genre, TitleInput } from '@/data/types';
 import { slugify } from '@/lib/slugify';
-import { storage } from '@/data/storage';
 import { isMediaUrlCspAllowed, normalizeMediaUrl } from '@/lib/storageUrl';
 import { CoverImage } from '@/components/manga/CoverImage';
 import { Button } from '@/components/ui/button';
@@ -9,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { Upload, Plus, Lock, Image as ImageIcon, RotateCcw, Trash2 } from 'lucide-react';
+import { Plus, Lock, Image as ImageIcon, RotateCcw, Trash2 } from 'lucide-react';
 
 interface TitleFormProps {
   initialData?: Title | null;
@@ -41,7 +40,6 @@ export function TitleForm({
   );
 
   const [newGenreName, setNewGenreName] = useState('');
-  const [isUploadingCover, setIsUploadingCover] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasDraft, setHasDraft] = useState(false);
 
@@ -131,21 +129,6 @@ export function TitleForm({
     }
   };
 
-  const handleCoverUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    setIsUploadingCover(true);
-    try {
-      const url = await storage.uploadCover(file);
-      setCoverUrl(url);
-    } catch {
-      setError('Ошибка при загрузке обложки');
-    } finally {
-      setIsUploadingCover(false);
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -160,14 +143,16 @@ export function TitleForm({
       return;
     }
 
-    // Обложка: нормализуем (trim, '' → null, http → https, мёртвые refs)
-    // и отклоняем URL, которые продовый CSP заведомо не пропустит —
-    // иначе админ сохранит тайтл и только потом обнаружит битую картинку.
+    // Обложка: нормализуем (trim, '' → null) и отклоняем то, что продовый CSP
+    // заведомо не пропустит (внешние домены, http://) — иначе админ сохранит
+    // тайтл и только потом обнаружит битую картинку. Обложки — файлы
+    // репозитория: /media/covers/{slug}.webp; относительные пути проходят.
     const normalizedCover = normalizeMediaUrl(coverUrl);
     if (normalizedCover && !isMediaUrlCspAllowed(normalizedCover)) {
       setError(
-        'Внешние домены обложек блокируются CSP (img-src пропускает только Supabase Storage). ' +
-          'Загрузите файл обложки здесь или укажите ссылку на объект Supabase Storage.'
+        'Допустим только путь к файлу репозитория вида /media/covers/slug.webp ' +
+          '(внешние домены и http:// CSP блокирует). Положите WebP-файл в ' +
+          'public/media/covers/ и укажите его путь здесь.'
       );
       return;
     }
@@ -224,41 +209,33 @@ export function TitleForm({
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Left Column: Cover */}
+        {/* Left Column: Cover — путь к файлу в репозитории (public/media/covers/) */}
         <div className="space-y-4">
           <Label>Обложка тайтла</Label>
-          <div className="relative aspect-[3/4] w-full rounded-xl border-2 border-dashed border-neutral-800 bg-neutral-900/50 flex flex-col items-center justify-center overflow-hidden group">
+          <div className="relative aspect-[3/4] w-full rounded-xl border-2 border-dashed border-neutral-800 bg-neutral-900/50 flex flex-col items-center justify-center overflow-hidden">
             {coverUrl ? (
-              <>
-                <CoverImage src={coverUrl} title={title || 'Тайтл'} className="h-full w-full object-cover" />
-                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
-                  <label className="cursor-pointer bg-neutral-900 text-white border border-neutral-700 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-neutral-800">
-                    Изменить обложку
-                    <input type="file" accept="image/*" className="hidden" onChange={handleCoverUpload} />
-                  </label>
-                </div>
-              </>
+              <CoverImage src={coverUrl} title={title || 'Тайтл'} className="h-full w-full object-cover" />
             ) : (
-              <label className="cursor-pointer flex flex-col items-center gap-2 p-6 text-center">
+              <div className="flex flex-col items-center gap-2 p-6 text-center">
                 <ImageIcon className="h-10 w-10 text-neutral-600" />
                 <span className="text-xs font-medium text-neutral-400">
-                  {isUploadingCover ? 'Загрузка...' : 'Нажмите для загрузки обложки'}
+                  Путь к обложке не указан — будет плейсхолдер
                 </span>
-                <input type="file" accept="image/*" className="hidden" onChange={handleCoverUpload} />
-              </label>
+              </div>
             )}
           </div>
           <Input
             type="text"
-            placeholder="Или вставьте URL обложки"
+            placeholder="/media/covers/slug.webp"
             value={coverUrl}
             onChange={(e) => setCoverUrl(e.target.value)}
             className="text-xs"
           />
           <p className="text-[11px] leading-snug text-neutral-500">
-            Допустимо: загрузка файла (станет WebP в Supabase Storage), ссылка на объект
-            Supabase Storage, data:-URL или путь вида <code>/media/…</code>. Внешние домены
-            CSP блокирует — превью покажет плейсхолдер, а сохранение отклонится с ошибкой.
+            Обложки — файлы репозитория: положите WebP (≤800 px по ширине) в{' '}
+            <code>public/media/covers/</code> и укажите путь вида{' '}
+            <code>/media/covers/{'{slug}'}.webp</code>. Если файла нет — превью и сайт
+            покажут плейсхолдер, а dev-консоль объяснит, какой путь не нашёлся.
           </p>
         </div>
 

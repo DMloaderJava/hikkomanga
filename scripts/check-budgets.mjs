@@ -5,6 +5,7 @@
  *   node scripts/check-budgets.mjs            # запуск после build (см. package.json)
  *   BUDGET_INITIAL_GZIP_KB=150 node …        # переопределить бюджет initial JS
  *   BUDGET_CATALOG_MEDIA_KB=350 node …       # переопределить бюджет медиа на «/»
+ *   BUDGET_COVERS_KB=600 node …              # переопределить бюджет обложек
  *
  * Что проверяется:
  *   1. Initial JS главной (dist/index.html: <script> + modulepreload), gzip —
@@ -14,9 +15,11 @@
  *      дрейф минорок, но ловит настоящий регресс (до оптимизаций было 185).
  *   2. Локальные /media/*, на которые ссылается пререндеренный index.html
  *      («первый экран каталога»), raw — ≤ BUDGET_CATALOG_MEDIA_KB (300 kB).
- *      Обложки из Supabase Storage статически не измеряются — их вес
- *      контролируется на этапе загрузки (compressToWebP, 800px, q0.85)
- *      и монитором check-covers.mjs.
+ *   3. Каталог обложек dist/media/covers/ (обложки тайтлов — файлы
+ *      репозитория), raw — ≤ BUDGET_COVERS_KB (по умолчанию 500 kB:
+ *      ~3–5 обложек по ~100 kB + запас на рост; сиды занимают ~23 kB).
+ *      Лимит держит git и первый экран лёгкими: новая обложка — осознанный
+ *      коммит файла в public/media/covers/.
  *
  * Exit 1 при пробитии бюджета — сборка падает до деплоя.
  */
@@ -28,6 +31,8 @@ const DIST = path.resolve(process.cwd(), 'dist');
 const INDEX = path.join(DIST, 'index.html');
 const BUDGET_INITIAL_GZIP_KB = Number(process.env.BUDGET_INITIAL_GZIP_KB || 145);
 const BUDGET_CATALOG_MEDIA_KB = Number(process.env.BUDGET_CATALOG_MEDIA_KB || 300);
+/** Суммарный вес обложек тайтлов (public/media/covers/ → dist/media/covers/). */
+const BUDGET_COVERS_KB = Number(process.env.BUDGET_COVERS_KB || 500);
 
 if (!fs.existsSync(INDEX)) {
   console.error('check-budgets: dist/index.html не найден — сначала `vite build` (+ пререндер).');
@@ -87,9 +92,32 @@ console.log(
     `${mediaOk ? 'OK' : 'ПРЕВЫШЕН'}\n`
 );
 
+// ── 3. Каталог обложек (репозиторий → dist/media/covers/) ───────────────────
+const coversDir = path.join(DIST, 'media/covers');
+const coverFiles = fs.existsSync(coversDir)
+  ? fs.readdirSync(coversDir).filter((f) => f.endsWith('.webp'))
+  : [];
+
+console.log('=== Бюджет обложек тайтлов (dist/media/covers/, raw) ===');
+let coversRaw = 0;
+for (const f of coverFiles) {
+  const size = fs.statSync(path.join(coversDir, f)).size;
+  coversRaw += size;
+  console.log(`  media/covers/${f.padEnd(44)} raw ${kb(size).padStart(8)} kB`);
+}
+if (coverFiles.length === 0) {
+  console.log('  (dist/media/covers/ пуст или отсутствует — сгенерируйте scripts/generate-seed-covers.mjs)');
+}
+const coversOk = coversRaw <= BUDGET_COVERS_KB * 1024;
+console.log(
+  `ИТОГО: ${coverFiles.length} файл(ов), ${kb(coversRaw)} kB raw из ${BUDGET_COVERS_KB} kB — ` +
+    `${coversOk ? 'OK' : 'ПРЕВЫШЕН'}\n`
+);
+
 const failures = [];
 if (!initialOk) failures.push(`initial JS ${kb(initialGz)} kB gzip > ${BUDGET_INITIAL_GZIP_KB} kB`);
 if (!mediaOk) failures.push(`медиа каталога ${kb(mediaRaw)} kB raw > ${BUDGET_CATALOG_MEDIA_KB} kB`);
+if (!coversOk) failures.push(`обложки ${kb(coversRaw)} kB raw > ${BUDGET_COVERS_KB} kB`);
 
 if (failures.length) {
   console.error('check-budgets: ПРЕВЫШЕН БЮДЖЕТ СБОРКИ:');

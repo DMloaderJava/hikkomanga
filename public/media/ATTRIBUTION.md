@@ -2,10 +2,12 @@
 
 ## Обложки
 
-Обложки в демо-режиме генерируются программно (`src/lib/placeholder-cover.ts`)
-как SVG-плейсхолдеры — авторские права третьих лиц не затрагиваются.
-Загрузите настоящие обложки через админ-панель: они уйдут в Supabase Storage
-(бакет `manga`), а в демо-режиме без Supabase останутся data-URL в localStorage.
+Обложки тайтлов — файлы репозитория: `public/media/covers/{slug}.webp`
+(генерируются скриптом `scripts/generate-seed-covers.mjs` из собственного
+SVG-генератора `src/lib/placeholder-cover.ts`, WebP 800px). Авторские права
+третьих лиц не затрагиваются. Новая обложка для своего тайтла: положите
+WebP-файл в `public/media/covers/` и укажите путь
+`/media/covers/{имя}.webp` в админке (TitleForm).
 
 ## Страницы глав (public domain)
 

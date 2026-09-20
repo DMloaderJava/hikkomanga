@@ -12,25 +12,15 @@ function fileToDataUrl(file: Blob): Promise<string> {
 }
 
 /**
- * Демо-режим без Supabase: data-URL складываются в localStorage, квота которого
- * ~5 MB. Обложка-мульти unpredictable размером в пару сотен килобайт выбивает
- * хранилище на 15–20 тайтлах (сдохнет ВЕСЬ каталог, а не одна обложка).
- * Компромисс: большие файлы живут в blob-URL до конца сессии, при перезагрузке
- * страницы CoverImage сам покажет плейсхолдер — данные при этом не теряются.
+ * Storage используется ТОЛЬКО для пользовательского контента: страницы глав
+ * (бакеты manga + hikko-originals) и озвучки (voiceovers).
+ *
+ * Обложки тайтлов здесь НЕ хранятся: это файлы репозитория
+ * (public/media/covers/, относительные пути в titles.cover_url) — см. ТЗ
+ * «отказаться от Supabase Storage для обложек». Поэтому uploadCover /
+ * deleteCover удалены; вернуться к ним имеет смысл только при обратном
+ * переезде обложек в Storage.
  */
-const DEMO_DATA_URL_LIMIT = 100 * 1024; // 100 kB
-
-async function demoCoverUrl(blob: Blob): Promise<string> {
-  const dataUrl = await fileToDataUrl(blob);
-  if (dataUrl.length <= DEMO_DATA_URL_LIMIT) return dataUrl;
-  console.warn(
-    `[storage] обложка ${(dataUrl.length / 1024).toFixed(0)} kB не помещается в localStorage демо-режима ` +
-      '(лимит 100 kB) — файл доступен только до перезагрузки страницы. ' +
-      'Настройте Supabase, чтобы обложки сохранялись в Storage.'
-  );
-  return URL.createObjectURL(blob);
-}
-
 export const storage = {
   async uploadPage(chapterId: string, file: File, order: number) {
     const ext = file.name.split('.').pop() || 'jpg';
@@ -76,38 +66,6 @@ export const storage = {
     };
   },
 
-  async uploadCover(file: File) {
-    const ext = file.name.split('.').pop() || 'jpg';
-    // Timestamp + случайный суффикс в пути = новая обложка получает новый URL:
-    // CDN Supabase не отдаст старый файл из кэша (cache-busting без ?v=).
-    const filename = `covers/${Date.now()}-${Math.random().toString(36).substring(2, 7)}.${ext}`;
-
-    let compressedBlob: Blob;
-    try {
-      compressedBlob = await compressToWebP(file, 800);
-    } catch {
-      compressedBlob = file;
-    }
-
-    if (isSupabaseConfigured) {
-      try {
-        const supabase = await getSupabase();
-        const { error } = await supabase.storage.from('manga').upload(filename, compressedBlob, {
-          cacheControl: '31536000',
-          upsert: true,
-        });
-
-        if (!error) {
-          return supabaseStoragePublicUrl('manga', filename);
-        }
-      } catch {
-        // Fallback
-      }
-    }
-
-    return await demoCoverUrl(compressedBlob);
-  },
-
   async uploadVoiceover(chapterId: string, audioBlob: Blob): Promise<string> {
     const path = `${chapterId}/${Date.now()}-voiceover.wav`;
     if (isSupabaseConfigured) {
@@ -142,19 +100,6 @@ export const storage = {
       }
     } catch (e) {
       console.error('Error deleting page from storage:', e);
-    }
-  },
-
-  async deleteCover(coverUrl: string | null) {
-    if (!isSupabaseConfigured) return;
-    try {
-      const supabase = await getSupabase();
-      const path = storagePathFromUrl(coverUrl, 'manga');
-      if (path) {
-        await supabase.storage.from('manga').remove([path]);
-      }
-    } catch (e) {
-      console.error('Error deleting cover from storage:', e);
     }
   },
 
