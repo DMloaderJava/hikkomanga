@@ -216,7 +216,7 @@ export function TitleForm({
           <div className="relative aspect-[3/4] w-full rounded-xl border-2 border-dashed border-neutral-800 bg-neutral-900/50 flex flex-col items-center justify-center overflow-hidden group">
             {coverUrl ? (
               <>
-                <img src={coverUrl} alt="Cover" className="h-full w-full object-cover" />
+                <img src={coverUrl} alt="Cover" className="h-full w-full object-cover" referrerPolicy="no-referrer" />
                 <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                   <label className="cursor-pointer bg-neutral-900 text-white border border-neutral-700 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-neutral-800">
                     Изменить обложку

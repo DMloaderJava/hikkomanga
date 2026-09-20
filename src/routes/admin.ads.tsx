@@ -386,6 +386,7 @@ function AdminAdsPage() {
                     src={ad.image_url}
                     alt=""
                     className="h-14 w-20 rounded object-cover border border-neutral-800 shrink-0"
+                    referrerPolicy="no-referrer"
                     onError={(e) => {
                       (e.currentTarget as HTMLImageElement).style.display = 'none';
                     }}

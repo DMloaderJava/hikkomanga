@@ -92,6 +92,9 @@ export function PagedReader({
           prefetchedUrlsRef.current.add(page.image_url);
           const img = new Image();
           img.decoding = 'async';
+          // Как у видимого <img>: иначе хотлинк-защита может отдать 403 на прелоад,
+          // а браузер закэширует ошибку и страница не покажется даже при открытии.
+          img.referrerPolicy = 'no-referrer';
           img.src = page.image_url;
           createdImages.push(img);
         }
@@ -184,6 +187,8 @@ export function PagedReader({
           fetchPriority={index === 0 ? 'high' : 'auto'}
           decoding={index === 0 ? 'sync' : 'async'}
           loading={index === 0 ? 'eager' : 'lazy'}
+          // Страницы могут быть внешними URL с хотлинк-защитой по Referer.
+          referrerPolicy="no-referrer"
           className="max-h-[calc(100vh-8rem)] w-auto object-contain rounded shadow-2xl bg-neutral-900"
           draggable={false}
         />

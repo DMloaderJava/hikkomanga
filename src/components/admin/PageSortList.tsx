@@ -58,7 +58,7 @@ function SortablePageItem({ page, index, onDelete }: SortablePageItemProps) {
         {/* Thumbnail */}
         <div className="h-16 w-12 shrink-0 overflow-hidden rounded-lg bg-neutral-950 border border-neutral-800 flex items-center justify-center">
           {page.image_url ? (
-            <img src={page.image_url} alt={`Стр. ${index + 1}`} className="h-full w-full object-cover" />
+            <img src={page.image_url} alt={`Стр. ${index + 1}`} className="h-full w-full object-cover" referrerPolicy="no-referrer" />
           ) : (
             <ImageIcon className="h-6 w-6 text-neutral-700" />
           )}
