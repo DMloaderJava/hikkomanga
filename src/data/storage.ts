@@ -1,5 +1,6 @@
 import { getSupabase, isSupabaseConfigured } from './client';
 import { compressToWebP } from '@/lib/imageCompress';
+import { supabaseStoragePublicUrl, storagePathFromUrl } from '@/lib/storageUrl';
 
 function fileToDataUrl(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -8,6 +9,26 @@ function fileToDataUrl(file: Blob): Promise<string> {
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+/**
+ * Демо-режим без Supabase: data-URL складываются в localStorage, квота которого
+ * ~5 MB. Обложка-мульти unpredictable размером в пару сотен килобайт выбивает
+ * хранилище на 15–20 тайтлах (сдохнет ВЕСЬ каталог, а не одна обложка).
+ * Компромисс: большие файлы живут в blob-URL до конца сессии, при перезагрузке
+ * страницы CoverImage сам покажет плейсхолдер — данные при этом не теряются.
+ */
+const DEMO_DATA_URL_LIMIT = 100 * 1024; // 100 kB
+
+async function demoCoverUrl(blob: Blob): Promise<string> {
+  const dataUrl = await fileToDataUrl(blob);
+  if (dataUrl.length <= DEMO_DATA_URL_LIMIT) return dataUrl;
+  console.warn(
+    `[storage] обложка ${(dataUrl.length / 1024).toFixed(0)} kB не помещается в localStorage демо-режима ` +
+      '(лимит 100 kB) — файл доступен только до перезагрузки страницы. ' +
+      'Настройте Supabase, чтобы обложки сохранялись в Storage.'
+  );
+  return URL.createObjectURL(blob);
 }
 
 export const storage = {
@@ -36,9 +57,9 @@ export const storage = {
         });
 
         if (!error) {
-          const { data } = supabase.storage.from('manga').getPublicUrl(publicPath);
           return {
-            image_url: data.publicUrl,
+            // Публичный URL собирается в storageUrl.ts — едином месте.
+            image_url: supabaseStoragePublicUrl('manga', publicPath),
             original_url: originalPath,
           };
         }
@@ -57,6 +78,8 @@ export const storage = {
 
   async uploadCover(file: File) {
     const ext = file.name.split('.').pop() || 'jpg';
+    // Timestamp + случайный суффикс в пути = новая обложка получает новый URL:
+    // CDN Supabase не отдаст старый файл из кэша (cache-busting без ?v=).
     const filename = `covers/${Date.now()}-${Math.random().toString(36).substring(2, 7)}.${ext}`;
 
     let compressedBlob: Blob;
@@ -75,15 +98,14 @@ export const storage = {
         });
 
         if (!error) {
-          const { data } = supabase.storage.from('manga').getPublicUrl(filename);
-          return data.publicUrl;
+          return supabaseStoragePublicUrl('manga', filename);
         }
       } catch {
         // Fallback
       }
     }
 
-    return await fileToDataUrl(compressedBlob);
+    return await demoCoverUrl(compressedBlob);
   },
 
   async uploadVoiceover(chapterId: string, audioBlob: Blob): Promise<string> {
@@ -97,8 +119,7 @@ export const storage = {
         });
 
         if (!error) {
-          const { data } = supabase.storage.from('voiceovers').getPublicUrl(path);
-          return data.publicUrl;
+          return supabaseStoragePublicUrl('voiceovers', path);
         }
       } catch {
         // Fallback
@@ -111,14 +132,13 @@ export const storage = {
     if (!isSupabaseConfigured) return;
     try {
       const supabase = await getSupabase();
-      if (originalPath && !originalPath.startsWith('data:')) {
-        await supabase.storage.from('hikko-originals').remove([originalPath]);
+      const original = storagePathFromUrl(originalPath, 'hikko-originals');
+      if (original) {
+        await supabase.storage.from('hikko-originals').remove([original]);
       }
-      if (imageUrl && !imageUrl.startsWith('data:')) {
-        const urlParts = imageUrl.split('/manga/');
-        if (urlParts.length > 1) {
-          await supabase.storage.from('manga').remove([urlParts[1]]);
-        }
+      const publicPath = storagePathFromUrl(imageUrl, 'manga');
+      if (publicPath) {
+        await supabase.storage.from('manga').remove([publicPath]);
       }
     } catch (e) {
       console.error('Error deleting page from storage:', e);
@@ -126,12 +146,12 @@ export const storage = {
   },
 
   async deleteCover(coverUrl: string | null) {
-    if (!isSupabaseConfigured || !coverUrl || coverUrl.startsWith('data:')) return;
+    if (!isSupabaseConfigured) return;
     try {
       const supabase = await getSupabase();
-      const urlParts = coverUrl.split('/manga/');
-      if (urlParts.length > 1) {
-        await supabase.storage.from('manga').remove([urlParts[1]]);
+      const path = storagePathFromUrl(coverUrl, 'manga');
+      if (path) {
+        await supabase.storage.from('manga').remove([path]);
       }
     } catch (e) {
       console.error('Error deleting cover from storage:', e);
@@ -139,12 +159,12 @@ export const storage = {
   },
 
   async deleteVoiceover(audioUrl: string | null) {
-    if (!isSupabaseConfigured || !audioUrl || audioUrl.startsWith('data:')) return;
+    if (!isSupabaseConfigured) return;
     try {
       const supabase = await getSupabase();
-      const urlParts = audioUrl.split('/voiceovers/');
-      if (urlParts.length > 1) {
-        await supabase.storage.from('voiceovers').remove([urlParts[1]]);
+      const path = storagePathFromUrl(audioUrl, 'voiceovers');
+      if (path) {
+        await supabase.storage.from('voiceovers').remove([path]);
       }
     } catch (e) {
       console.error('Error deleting voiceover audio from storage:', e);

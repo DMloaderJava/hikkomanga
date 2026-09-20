@@ -21,13 +21,21 @@ export function fullTitle(title?: string): string {
   return title ? `${title} — ${SITE_NAME}` : `${SITE_NAME} — Читалка манги онлайн`;
 }
 
-/** Картинка для og:image — только абсолютный http(s); data:-URL не выкладываем. */
+/** Кэшируемый плейсхолдер — og:image обязателен на каждой публичной странице. */
+const PLACEHOLDER_COVER_PATH = '/media/placeholder-cover.svg';
+
+/**
+ * Картинка для og:image — только абсолютный http(s).
+ * data:-URL в соцсетях/мессенджерах не работает, поэтому для тайтла с
+ * демо-обложкой (и для страниц вовсе без обложки) отдаём статический
+ * плейсхолдер с абсолютным SITE_URL — превью ссылки остаётся презентабельным.
+ */
 function shareImage(image?: string | null): string | undefined {
-  if (!image) return undefined;
-  if (image.startsWith('data:')) return undefined;
-  if (/^https?:\/\//i.test(image)) return image;
-  if (image.startsWith('/') && SITE_URL) return `${SITE_URL}${image}`;
-  return undefined;
+  if (image && !image.startsWith('data:')) {
+    if (/^https?:\/\//i.test(image)) return image;
+    if (image.startsWith('/') && SITE_URL) return `${SITE_URL}${image}`;
+  }
+  return SITE_URL ? `${SITE_URL}${PLACEHOLDER_COVER_PATH}` : undefined;
 }
 
 /**

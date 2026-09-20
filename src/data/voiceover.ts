@@ -1,6 +1,6 @@
 import { getSupabase, isSupabaseConfigured } from './client';
 import { storage } from './storage';
-import { repairSupabaseUrl } from '@/lib/storageUrl';
+import { normalizeMediaUrl } from '@/lib/storageUrl';
 import type { DialogueLine, ChapterVoiceover } from './types';
 export type { ChapterVoiceover };
 
@@ -37,11 +37,11 @@ export const voiceoverApi = {
           .maybeSingle();
 
         if (!error && data) {
-          // Чиним ссылки на storage удалённых Supabase-проектов (см. storageUrl.ts)
+          // Чиним + нормализуем ссылку на озвучку (см. storageUrl.ts)
           const row = data as ChapterVoiceover;
           return {
             ...row,
-            audio_url: repairSupabaseUrl(row.audio_url) ?? row.audio_url,
+            audio_url: normalizeMediaUrl(row.audio_url) ?? row.audio_url,
           };
         }
       } catch {

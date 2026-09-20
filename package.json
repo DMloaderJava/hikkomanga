@@ -5,18 +5,21 @@
   "scripts": {
     "dev": "vite",
     "analyze": "ANALYZE=true vite build",
-    "build": "vite build && node scripts/generate-sitemap.mjs && node scripts/prerender.mjs && node scripts/check-verification.mjs --built",
+    "build": "vite build && node scripts/generate-sitemap.mjs && node scripts/prerender.mjs && node scripts/check-verification.mjs --built && node scripts/check-budgets.mjs",
     "build:spa": "vite build",
     "prerender": "node scripts/prerender.mjs",
     "sitemap": "node scripts/generate-sitemap.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "node scripts/check-verification.mjs && node --test scripts/unit-verification.mjs && node scripts/smoke-data-layer.mjs && node scripts/unit-auth-notify.mjs",
+    "test": "node scripts/check-verification.mjs && node --test scripts/unit-verification.mjs && node scripts/smoke-data-layer.mjs && node scripts/unit-auth-notify.mjs && node scripts/unit-covers.mjs",
     "test:verification": "node scripts/check-verification.mjs",
     "test:unit": "node scripts/unit-auth-notify.mjs",
+    "test:covers": "node scripts/unit-covers.mjs",
     "test:smoke": "node scripts/smoke-data-layer.mjs",
     "test:verification:unit": "node --test scripts/unit-verification.mjs",
-    "check:supabase": "node scripts/check-supabase-project.mjs"
+    "check:supabase": "node scripts/check-supabase-project.mjs",
+    "check:covers": "node scripts/check-covers.mjs",
+    "check:budgets": "node scripts/check-budgets.mjs"
   },
   "repository": {
     "type": "git",

@@ -72,3 +72,20 @@ const totalMediaGz = mediaOnly.reduce((acc, x) => acc + x.gz, 0);
 console.log(`\nTOTAL DIST (excl stats.html): Raw = ${(totalDistRaw/1024).toFixed(2)} kB | Gzip = ${(totalDistGz/1024).toFixed(2)} kB`);
 console.log(`TOTAL JS: Raw = ${(totalJsRaw/1024).toFixed(2)} kB | Gzip = ${(totalJsGz/1024).toFixed(2)} kB`);
 console.log(`TOTAL MEDIA: Raw = ${(totalMediaRaw/1024).toFixed(2)} kB | Gzip = ${(totalMediaGz/1024).toFixed(2)} kB`);
+
+// ── Вес первого экрана каталога (локальные /media из пререндеренного index.html) ──
+const catalogMediaRefs = Array.from(new Set(
+  Array.from(indexHtml.matchAll(/(?:src|content)=["'](\/media\/[^"']+)["']/g)).map(m => m[1].split('?')[0])
+));
+let catalogMediaRaw = 0;
+console.log('\n=== CATALOG FIRST-SCREEN MEDIA (локальные /media в index.html) ===');
+catalogMediaRefs.forEach(ref => {
+  const item = filesData.find(x => x.file === ref.replace(/^\//, ''));
+  if (item) {
+    catalogMediaRaw += item.raw;
+    console.log(`${item.file.padEnd(55)} | Raw: ${(item.raw/1024).toFixed(2).padStart(7)} kB`);
+  } else {
+    console.log(`NOT FOUND: ${ref}`);
+  }
+});
+console.log(`CATALOG MEDIA TOTAL: Raw = ${(catalogMediaRaw/1024).toFixed(2)} kB (бюджет 300 kB — scripts/check-budgets.mjs). Обложки из Supabase Storage статически не измеряются: их вес ограничивает compressToWebP(800px) при загрузке.`);

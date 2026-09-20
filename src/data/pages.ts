@@ -1,12 +1,20 @@
 import { getSupabase, isSupabaseConfigured } from './client';
 import { mockStore } from './mockStore';
 import { storage } from './storage';
-import { repairSupabaseUrl } from '@/lib/storageUrl';
+import { normalizeMediaUrl } from '@/lib/storageUrl';
 import type { Page, PageInput } from './types';
 
-/** Чиним ссылки на storage удалённых Supabase-проектов (см. storageUrl.ts). */
+/**
+ * Чиним ссылки на storage удалённых Supabase-проектов (см. storageUrl.ts).
+ * original_url тоже: это либо путь в бакете hikko-originals (голый путь —
+ * проходит как есть), либо data:/URL — нормализация не должна его ломать.
+ */
 function repairPageRow(row: Page): Page {
-  return { ...row, image_url: repairSupabaseUrl(row.image_url) ?? row.image_url };
+  return {
+    ...row,
+    image_url: normalizeMediaUrl(row.image_url) ?? row.image_url,
+    original_url: row.original_url ? (normalizeMediaUrl(row.original_url) ?? row.original_url) : row.original_url,
+  };
 }
 
 export const pages = {

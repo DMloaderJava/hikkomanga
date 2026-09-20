@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import type { Title, Genre, TitleInput } from '@/data/types';
 import { slugify } from '@/lib/slugify';
 import { storage } from '@/data/storage';
+import { isMediaUrlCspAllowed, normalizeMediaUrl } from '@/lib/storageUrl';
+import { CoverImage } from '@/components/manga/CoverImage';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -158,13 +160,25 @@ export function TitleForm({
       return;
     }
 
+    // Обложка: нормализуем (trim, '' → null, http → https, мёртвые refs)
+    // и отклоняем URL, которые продовый CSP заведомо не пропустит —
+    // иначе админ сохранит тайтл и только потом обнаружит битую картинку.
+    const normalizedCover = normalizeMediaUrl(coverUrl);
+    if (normalizedCover && !isMediaUrlCspAllowed(normalizedCover)) {
+      setError(
+        'Внешние домены обложек блокируются CSP (img-src пропускает только Supabase Storage). ' +
+          'Загрузите файл обложки здесь или укажите ссылку на объект Supabase Storage.'
+      );
+      return;
+    }
+
     try {
       await onSubmit({
         title: title.trim(),
         slug: slug.trim(),
         author: author.trim() || null,
         description: description.trim() || null,
-        cover_url: coverUrl || null,
+        cover_url: normalizedCover,
         status,
         published,
         genre_ids: selectedGenreIds,
@@ -216,7 +230,7 @@ export function TitleForm({
           <div className="relative aspect-[3/4] w-full rounded-xl border-2 border-dashed border-neutral-800 bg-neutral-900/50 flex flex-col items-center justify-center overflow-hidden group">
             {coverUrl ? (
               <>
-                <img src={coverUrl} alt="Cover" className="h-full w-full object-cover" />
+                <CoverImage src={coverUrl} title={title || 'Тайтл'} className="h-full w-full object-cover" />
                 <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 flex items-center justify-center transition-opacity">
                   <label className="cursor-pointer bg-neutral-900 text-white border border-neutral-700 px-3 py-1.5 rounded-lg text-xs font-medium hover:bg-neutral-800">
                     Изменить обложку
@@ -241,6 +255,11 @@ export function TitleForm({
             onChange={(e) => setCoverUrl(e.target.value)}
             className="text-xs"
           />
+          <p className="text-[11px] leading-snug text-neutral-500">
+            Допустимо: загрузка файла (станет WebP в Supabase Storage), ссылка на объект
+            Supabase Storage, data:-URL или путь вида <code>/media/…</code>. Внешние домены
+            CSP блокирует — превью покажет плейсхолдер, а сохранение отклонится с ошибкой.
+          </p>
         </div>
 
         {/* Right Column: Title Info */}
