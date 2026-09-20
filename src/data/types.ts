@@ -96,9 +96,12 @@ export type RequestType =
   | 'delete_title'
   | 'delete_chapter'
   | 'new_chapter'
-  | 'ad_request';
+  | 'ad_request'
+  // Анонимная заявка на тайтл (edge submit-title); остальные типы модели БД —
+  // итерациями (см. миграцию 00000000000010).
+  | 'new_title';
 
-export type RequestStatus = 'pending' | 'approved' | 'rejected';
+export type RequestStatus = 'pending' | 'approved' | 'rejected' | 'spam';
 
 export interface AdminRequest {
   id: string;
@@ -113,6 +116,18 @@ export interface AdminRequest {
   reject_reason?: string;
   note?: string;
   created_at: string;
+  // ── Анонимные заявки (new_title) ──
+  /** sha256(ip + RATE_LIMIT_SALT) — сырой IP нигде не хранится. */
+  ip_hash?: string | null;
+  user_agent?: string | null;
+  /** Капча пройдена (edge ставит true после verify). */
+  turnstile_ok?: boolean;
+  /** Токен заявителя для страницы /s/{token}. */
+  public_token?: string | null;
+  /** Опциональный email для уведомления о решении. */
+  submitter_email?: string | null;
+  /** true = slug занят при approve; черновик не создан. */
+  conflict?: boolean;
 }
 
 // ── Реклама ─────────────────────────────────────────────────────────────────

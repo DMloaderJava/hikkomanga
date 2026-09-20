@@ -1,6 +1,7 @@
 import { getSupabase, isSupabaseConfigured } from './client';
+import { SUPABASE_URL, SUPABASE_ANON_KEY } from '@/integrations/supabase/config';
 import type { AdminRequest, RequestType } from './types';
-import { RateLimitError } from './types';
+import { RateLimitError, SlugConflictError } from './types';
 
 const DEMO_KEY = 'manga_admin_requests';
 
@@ -131,11 +132,15 @@ export const adminRequests = {
     return (data ?? []) as AdminRequest[];
   },
 
+  /**
+   * Решение owner'а. 'spam' — как rejected, но помечает нарушителя
+   * (попадает в автоочистку через 90 дней и в фильтр bulk-reject по IP).
+   */
   async resolve(
     id: string,
-    decision: 'approved' | 'rejected',
+    decision: 'approved' | 'rejected' | 'spam',
     rejectReason?: string
-  ): Promise<void> {
+  ): Promise<{ conflict?: boolean }> {
     if (!isSupabaseConfigured) {
       const list = loadDemo();
       const idx = list.findIndex((r) => r.id === id);
@@ -143,8 +148,19 @@ export const adminRequests = {
       const prev = list[idx];
 
       // Demo: применяем side-effect локально (в проде — триггер apply_admin_request).
+      // new_title: конфликт slug НЕ срывает approve — заявка одобряется с
+      // payload.conflict=true (как on conflict do nothing в триггере).
+      let conflictPayload: Record<string, unknown> | null = null;
       if (decision === 'approved' && prev.status === 'pending') {
-        await applyDemoRequest(prev);
+        try {
+          await applyDemoRequest(prev);
+        } catch (e) {
+          if (e instanceof SlugConflictError && prev.type === 'new_title') {
+            conflictPayload = { conflict: true };
+          } else {
+            throw e;
+          }
+        }
       }
 
       // resolved_by — из текущей demo-сессии (mockStore), как auth.uid() в SQL.
@@ -162,9 +178,11 @@ export const adminRequests = {
         resolved_at: new Date().toISOString(),
         resolved_by: demoResolver,
         reject_reason: rejectReason,
+        payload: conflictPayload ? { ...prev.payload, ...conflictPayload } : prev.payload,
+        conflict: conflictPayload ? true : false,
       };
       saveDemo(list);
-      return;
+      return conflictPayload ? { conflict: true } : {};
     }
 
     const supabase = await getSupabase();
@@ -176,8 +194,9 @@ export const adminRequests = {
       // ignore
     }
 
-    // UPDATE → BEFORE trigger apply_admin_request (delete/create chapter).
-    const { error } = await supabase
+    // UPDATE → BEFORE trigger apply_admin_request (delete/create chapter,
+    // черновик new_title + payload.conflict при занятом slug).
+    const { data, error } = await supabase
       .from('admin_requests')
       .update({
         status: decision,
@@ -185,9 +204,132 @@ export const adminRequests = {
         resolved_by: resolvedBy,
         reject_reason: rejectReason ?? null,
       })
-      .eq('id', id);
+      .eq('id', id)
+      .select('payload')
+      .single();
 
     if (error) throw new Error(`Не удалось обновить заявку: ${error.message}`);
+    return data?.payload?.conflict === true ? { conflict: true } : {};
+  },
+
+  /**
+   * Полный список для owner-инбокса с фильтрами (тип/статус на стороне SQL,
+   * поиск по ip_hash — клиентом). Нужно для разбора анонимных заявок:
+   * pending по умолчанию, но resolved тоже видны.
+   */
+  async listForOwner(opts?: { status?: string; type?: string; limit?: number }): Promise<AdminRequest[]> {
+    const limit = opts?.limit ?? 200;
+    if (!isSupabaseConfigured) {
+      let list = loadDemo();
+      if (opts?.status) list = list.filter((r) => r.status === opts.status);
+      if (opts?.type) list = list.filter((r) => r.type === opts.type);
+      return list.slice(0, limit);
+    }
+
+    const supabase = await getSupabase();
+    let q = supabase
+      .from('admin_requests')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (opts?.status) q = q.eq('status', opts.status);
+    if (opts?.type) q = q.eq('type', opts.type);
+
+    const { data, error } = await q;
+    if (error) throw new Error(error.message);
+    return (data ?? []) as AdminRequest[];
+  },
+
+  /**
+   * Bulk reject: все pending-заявки с этого ip_hash → rejected. Против
+   * спам-волн: одна кнопка вместо ручного перещёлкивания.
+   */
+  async rejectByIp(ipHash: string, rejectReason?: string): Promise<number> {
+    if (!ipHash?.trim()) throw new Error('ip_hash обязателен');
+
+    if (!isSupabaseConfigured) {
+      const list = loadDemo();
+      let count = 0;
+      const now = new Date().toISOString();
+      const updated = list.map((r) => {
+        if (r.status === 'pending' && r.ip_hash === ipHash) {
+          count += 1;
+          return {
+            ...r,
+            status: 'rejected' as const,
+            resolved_at: now,
+            resolved_by: 'demo-admin-01',
+            reject_reason: rejectReason ?? 'bulk: спам с одного IP',
+          };
+        }
+        return r;
+      });
+      saveDemo(updated);
+      return count;
+    }
+
+    const supabase = await getSupabase();
+    let resolvedBy: string | null = null;
+    try {
+      const { data } = await supabase.auth.getUser();
+      resolvedBy = data.user?.id ?? null;
+    } catch {
+      // ignore
+    }
+    const { data, error } = await supabase
+      .from('admin_requests')
+      .update({
+        status: 'rejected',
+        resolved_at: new Date().toISOString(),
+        resolved_by: resolvedBy,
+        reject_reason: rejectReason ?? 'bulk: спам с одного IP',
+      })
+      .eq('ip_hash', ipHash)
+      .eq('status', 'pending')
+      .select('id');
+
+    if (error) throw new Error(`Не удалось отклонить заявки: ${error.message}`);
+    return data?.length ?? 0;
+  },
+
+  /**
+   * Уведомить заявителя о решении (если он оставил email).
+   * Fire-and-forget: ошибка почты НЕ срывает модерацию. В демо — console.info.
+   */
+  async notifySubmitter(info: {
+    email?: string | null;
+    status: 'approved' | 'rejected' | 'spam';
+    title?: string;
+    reason?: string;
+  }): Promise<void> {
+    if (!info.email) return;
+    if (!isSupabaseConfigured) {
+      console.info(`[demo] уведомили бы ${info.email}: заявка «${info.title}» → ${info.status}`);
+      return;
+    }
+    try {
+      const supabase = await getSupabase();
+      const { data } = await supabase.auth.getSession();
+      const token = data.session?.access_token;
+      if (!token) return;
+      await fetch(`${SUPABASE_URL}/functions/v1/notify-submitter`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          apikey: SUPABASE_ANON_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          email: info.email,
+          status: info.status,
+          title: info.title,
+          reason: info.reason,
+          siteUrl: window.location.origin,
+        }),
+      });
+    } catch (e) {
+      console.warn('[adminRequests] notify-submitter недоступен:', e);
+    }
   },
 };
 
@@ -249,6 +391,29 @@ async function applyDemoRequest(req: AdminRequest): Promise<void> {
         throw e;
       }
     }
+  }
+  if (req.type === 'new_title') {
+    // Анонимная заявка на тайтл → черновик (published=false), как триггер 14.
+    // Занятый slug → SlugConflictError: resolve() ловит и ставит payload.conflict.
+    const { titles } = await import('./titles');
+    const { slugify } = await import('@/lib/slugify');
+    const p = req.payload as Record<string, unknown>;
+    const original = typeof p.original_title === 'string' ? p.original_title : '';
+    if (!original.trim()) throw new Error('В заявке нет original_title');
+
+    const status =
+      p.status === 'completed' || p.status === 'ongoing' ? p.status : 'ongoing';
+    await titles.create({
+      slug: slugify(original),
+      title: original,
+      author: typeof p.author === 'string' && p.author ? p.author : null,
+      description: typeof p.description === 'string' && p.description ? p.description : null,
+      cover_url: typeof p.cover_url === 'string' && p.cover_url ? p.cover_url : null,
+      status,
+      published: false,
+      genre_ids: [],
+    });
+    return;
   }
   // ad_request — без авто-применения
 }

@@ -3,6 +3,7 @@ import { BookOpen, Shield, LogOut } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { auth } from '@/data/auth';
 import { Button } from '@/components/ui/button';
+import { AddMenu } from '@/components/requests/AddMenu';
 
 export function Header() {
   const { session, isAdmin } = useAuth();
@@ -44,6 +45,8 @@ export function Header() {
         </div>
 
         <div className="flex items-center gap-3">
+          {/* «+» всем, включая анонимов: заявка на тайтл без регистрации */}
+          <AddMenu />
           {session ? (
             <>
               {isAdmin && (

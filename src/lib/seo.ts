@@ -60,6 +60,7 @@ export function seoForRoute(routeId: string, data?: any): SeoInput {
           'Разместите баннер между главами манги для активной аудитории читателей.',
       };
 
+
     case '/title/$slug':
     case '/title/$slug/': {
       const title = data?.title;
@@ -82,6 +83,13 @@ export function seoForRoute(routeId: string, data?: any): SeoInput {
         image: title.cover_url,
       };
     }
+
+    case '/s/$token':
+      // Персональная ссылка статуса: индексировать нечего и не нужно.
+      return {
+        title: 'Статус заявки',
+        noindex: true,
+      };
 
     default:
       // Всё, что внутри /admin, в поиске не нужно.
