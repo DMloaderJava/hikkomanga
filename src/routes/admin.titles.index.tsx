@@ -8,6 +8,7 @@ import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { CoverImage } from '@/components/manga/CoverImage';
 import { RequestForm } from '@/components/admin/RequestForm';
 import {
   Library,
@@ -154,9 +155,7 @@ function AdminTitlesIndexPage() {
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-3">
                     <div className="h-14 w-10 shrink-0 overflow-hidden rounded bg-neutral-950 border border-neutral-800">
-                      {t.cover_url && (
-                        <img src={t.cover_url} alt={t.title} className="h-full w-full object-cover" />
-                      )}
+                      <CoverImage src={t.cover_url} title={t.title} className="h-full w-full object-cover" />
                     </div>
                     <div>
                       <div className="font-bold text-white text-base">{t.title}</div>

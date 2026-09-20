@@ -9,3 +9,4 @@ dist
 !.env.production
 # Служебная папка Supabase CLI (project-ref, pooler-url, кэш версий)
 supabase/.temp
+.tanstack/

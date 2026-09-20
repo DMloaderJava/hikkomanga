@@ -3,6 +3,7 @@ import { createFileRoute, Link } from '@tanstack/react-router';
 import { titles as titlesApi } from '@/data/titles';
 import { chapters as chaptersApi } from '@/data/chapters';
 import { ChapterList } from '@/components/manga/ChapterList';
+import { CoverImage } from '@/components/manga/CoverImage';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { updateMetaTags, seoForRoute } from '@/lib/seo';
@@ -53,17 +54,17 @@ function TitleDetailsPage() {
       <section className="relative overflow-hidden rounded-3xl border border-neutral-800 bg-neutral-900/60 p-6 sm:p-8 backdrop-blur-xl shadow-2xl">
         <div className="flex flex-col md:flex-row gap-8 items-start">
           <div className="relative aspect-[3/4] w-48 sm:w-56 shrink-0 overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-950 shadow-2xl mx-auto md:mx-0">
-            {title.cover_url ? (
-              <img
-                src={title.cover_url}
-                alt={title.title}
-                className="h-full w-full object-cover"
-              />
-            ) : (
-              <div className="flex h-full w-full items-center justify-center text-neutral-700">
-                <BookOpen className="h-16 w-16" />
-              </div>
-            )}
+            <CoverImage
+              src={title.cover_url}
+              title={title.title}
+              className="h-full w-full object-cover"
+              loading="eager"
+              fallback={
+                <div className="flex h-full w-full items-center justify-center text-neutral-700">
+                  <BookOpen className="h-16 w-16" />
+                </div>
+              }
+            />
           </div>
 
           <div className="flex-1 space-y-4">

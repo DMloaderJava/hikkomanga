@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { Search, X } from 'lucide-react';
 import { Input } from '@/components/ui/input';
+import { CoverImage } from '@/components/manga/CoverImage';
 import { useNavigate } from '@tanstack/react-router';
 import type { Title } from '@/data/types';
 
@@ -124,11 +125,12 @@ export function SearchBar({
                 }`}
               >
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-md bg-[#2a1c22]">
-                  {t.cover_url ? (
-                    <img src={t.cover_url} alt="" className="h-full w-full object-cover" />
-                  ) : (
-                    <span className="text-[10px] font-bold text-rose-200">{t.title.slice(0, 2)}</span>
-                  )}
+                  <CoverImage
+                    src={t.cover_url}
+                    title={t.title}
+                    className="h-full w-full object-cover"
+                    fallback={<span className="text-[10px] font-bold text-rose-200">{t.title.slice(0, 2)}</span>}
+                  />
                 </span>
                 <span className="min-w-0">
                   <span className="block truncate font-medium text-white">{t.title}</span>
