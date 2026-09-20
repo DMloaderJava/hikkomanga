@@ -41,6 +41,9 @@ export function CoverImage({ src, title, className, fallback, loading = 'lazy' }
       alt={title}
       loading={loading}
       className={imgClassName}
+      // Внешние обложки (по URL) часто лежат на хостингах с хотлинк-защитой —
+      // без Referer они отдают картинку, а с ним могут вернуть 403.
+      referrerPolicy="no-referrer"
       onError={() => {
         console.warn(`[CoverImage] не загрузилась обложка «${title}»:`, src);
         setFailed(true);

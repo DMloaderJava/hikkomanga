@@ -139,6 +139,7 @@ export function VoiceoverPlayer({ voiceover, pages }: VoiceoverPlayerProps) {
               src={pages[currentPageIndex].image_url}
               alt={`Слайд ${currentPageIndex + 1}`}
               className="h-full w-full object-contain"
+              referrerPolicy="no-referrer"
             />
           </div>
         ) : (
