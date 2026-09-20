@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="300" height="450" viewBox="0 0 300 450" role="img" aria-label="Обложка пока не загружена">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.6" y2="1">
+      <stop offset="0%" stop-color="#2a1420"/>
+      <stop offset="100%" stop-color="#150c12"/>
+    </linearGradient>
+  </defs>
+  <rect width="300" height="450" fill="url(#bg)"/>
+  <g transform="translate(114,158)" color="#8a4a5e">
+    <rect x="14" y="10" width="44" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="2.5" opacity="0.45"/>
+    <rect x="18" y="10" width="40" height="56" rx="3" fill="none" stroke="currentColor" stroke-width="2.5" opacity="0.65"/>
+    <line x1="26" y1="24" x2="50" y2="24" stroke="currentColor" stroke-width="2" opacity="0.5"/>
+    <line x1="26" y1="32" x2="50" y2="32" stroke="currentColor" stroke-width="2" opacity="0.4"/>
+    <line x1="26" y1="40" x2="42" y2="40" stroke="currentColor" stroke-width="2" opacity="0.3"/>
+  </g>
+  <text x="150" y="268" font-family="system-ui, sans-serif" font-size="13" font-weight="600" fill="#d8a5b4" opacity="0.85" text-anchor="middle">Обложка скоро появится</text>
+  <line x1="110" y1="284" x2="190" y2="284" stroke="#8a4a5e" stroke-width="1" opacity="0.35"/>
+  <text x="150" y="304" font-family="system-ui, sans-serif" font-size="10" fill="#9c7280" opacity="0.7" text-anchor="middle">Hikkomanga</text>
+</svg>

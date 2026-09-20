@@ -1,5 +1,6 @@
 import { getSupabase, isSupabaseConfigured } from './client';
 import { compressToWebP } from '@/lib/imageCompress';
+import { supabaseStoragePublicUrl, storagePathFromUrl } from '@/lib/storageUrl';
 
 function fileToDataUrl(file: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -10,6 +11,16 @@ function fileToDataUrl(file: Blob): Promise<string> {
   });
 }
 
+/**
+ * Storage используется ТОЛЬКО для пользовательского контента: страницы глав
+ * (бакеты manga + hikko-originals) и озвучки (voiceovers).
+ *
+ * Обложки тайтлов здесь НЕ хранятся: это файлы репозитория
+ * (public/media/covers/, относительные пути в titles.cover_url) — см. ТЗ
+ * «отказаться от Supabase Storage для обложек». Поэтому uploadCover /
+ * deleteCover удалены; вернуться к ним имеет смысл только при обратном
+ * переезде обложек в Storage.
+ */
 export const storage = {
   async uploadPage(chapterId: string, file: File, order: number) {
     const ext = file.name.split('.').pop() || 'jpg';
@@ -36,9 +47,9 @@ export const storage = {
         });
 
         if (!error) {
-          const { data } = supabase.storage.from('manga').getPublicUrl(publicPath);
           return {
-            image_url: data.publicUrl,
+            // Публичный URL собирается в storageUrl.ts — едином месте.
+            image_url: supabaseStoragePublicUrl('manga', publicPath),
             original_url: originalPath,
           };
         }
@@ -55,37 +66,6 @@ export const storage = {
     };
   },
 
-  async uploadCover(file: File) {
-    const ext = file.name.split('.').pop() || 'jpg';
-    const filename = `covers/${Date.now()}-${Math.random().toString(36).substring(2, 7)}.${ext}`;
-
-    let compressedBlob: Blob;
-    try {
-      compressedBlob = await compressToWebP(file, 800);
-    } catch {
-      compressedBlob = file;
-    }
-
-    if (isSupabaseConfigured) {
-      try {
-        const supabase = await getSupabase();
-        const { error } = await supabase.storage.from('manga').upload(filename, compressedBlob, {
-          cacheControl: '31536000',
-          upsert: true,
-        });
-
-        if (!error) {
-          const { data } = supabase.storage.from('manga').getPublicUrl(filename);
-          return data.publicUrl;
-        }
-      } catch {
-        // Fallback
-      }
-    }
-
-    return await fileToDataUrl(compressedBlob);
-  },
-
   async uploadVoiceover(chapterId: string, audioBlob: Blob): Promise<string> {
     const path = `${chapterId}/${Date.now()}-voiceover.wav`;
     if (isSupabaseConfigured) {
@@ -97,8 +77,7 @@ export const storage = {
         });
 
         if (!error) {
-          const { data } = supabase.storage.from('voiceovers').getPublicUrl(path);
-          return data.publicUrl;
+          return supabaseStoragePublicUrl('voiceovers', path);
         }
       } catch {
         // Fallback
@@ -111,40 +90,26 @@ export const storage = {
     if (!isSupabaseConfigured) return;
     try {
       const supabase = await getSupabase();
-      if (originalPath && !originalPath.startsWith('data:')) {
-        await supabase.storage.from('hikko-originals').remove([originalPath]);
+      const original = storagePathFromUrl(originalPath, 'hikko-originals');
+      if (original) {
+        await supabase.storage.from('hikko-originals').remove([original]);
       }
-      if (imageUrl && !imageUrl.startsWith('data:')) {
-        const urlParts = imageUrl.split('/manga/');
-        if (urlParts.length > 1) {
-          await supabase.storage.from('manga').remove([urlParts[1]]);
-        }
+      const publicPath = storagePathFromUrl(imageUrl, 'manga');
+      if (publicPath) {
+        await supabase.storage.from('manga').remove([publicPath]);
       }
     } catch (e) {
       console.error('Error deleting page from storage:', e);
     }
   },
 
-  async deleteCover(coverUrl: string | null) {
-    if (!isSupabaseConfigured || !coverUrl || coverUrl.startsWith('data:')) return;
-    try {
-      const supabase = await getSupabase();
-      const urlParts = coverUrl.split('/manga/');
-      if (urlParts.length > 1) {
-        await supabase.storage.from('manga').remove([urlParts[1]]);
-      }
-    } catch (e) {
-      console.error('Error deleting cover from storage:', e);
-    }
-  },
-
   async deleteVoiceover(audioUrl: string | null) {
-    if (!isSupabaseConfigured || !audioUrl || audioUrl.startsWith('data:')) return;
+    if (!isSupabaseConfigured) return;
     try {
       const supabase = await getSupabase();
-      const urlParts = audioUrl.split('/voiceovers/');
-      if (urlParts.length > 1) {
-        await supabase.storage.from('voiceovers').remove([urlParts[1]]);
+      const path = storagePathFromUrl(audioUrl, 'voiceovers');
+      if (path) {
+        await supabase.storage.from('voiceovers').remove([path]);
       }
     } catch (e) {
       console.error('Error deleting voiceover audio from storage:', e);

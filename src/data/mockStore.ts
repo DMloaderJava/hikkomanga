@@ -1,14 +1,24 @@
 import type { Title, Chapter, Page, Genre, TitleInput, ChapterInput, PageInput } from './types';
 import { DuplicateChapterError } from './types';
-import { generatePlaceholderCover } from '@/lib/placeholder-cover';
+import { normalizeMediaUrl } from '@/lib/storageUrl';
 
 /** Локальные демо-медиа лежат в public/media (см. public/media/ATTRIBUTION.md). */
 const asset = (path: string) => `${import.meta.env?.BASE_URL ?? '/'}${path}`;
 
 /** При смене версии сидов старый localStorage сбрасывается, иначе новые
- *  обложки/страницы никогда не доедут до браузера пользователя. */
-const SEED_VERSION = '3';
+ *  обложки/страницы никогда не доедут до браузера пользователя.
+ *  v4: обложки переехали из SVG data-URL в файлы /media/covers/{slug}.webp. */
+const SEED_VERSION = '4';
 const SEED_KEYS = ['manga_genres', 'manga_titles', 'manga_chapters', 'manga_pages'];
+
+/**
+ * Обложки тайтлов — файлы в репозитории (public/media/covers/, генерируются
+ * scripts/generate-seed-covers.mjs). В cover_url хранится относительный путь.
+ * Для новых тайтлов админ указывает путь вручную в TitleForm; файл с таким
+ * именем должен существовать в public/media/covers/ (иначе CoverImage
+ * покажет плейсхолдер).
+ */
+const cover = (slug: string) => `${import.meta.env?.BASE_URL ?? '/'}media/covers/${slug}.webp`;
 
 const INITIAL_GENRES: Genre[] = [
   { id: 'g-1', name: 'Экшен' },
@@ -29,7 +39,7 @@ const INITIAL_TITLES: Title[] = [
     title: 'Поднятие уровня в одиночку',
     author: 'Chugong',
     description: '10 лет назад открылись Врата, соединившие наш мир с миром монстров. С тех пор некоторые люди обрели сверхспособности. Их называют Охотниками.',
-    cover_url: generatePlaceholderCover('Поднятие уровня в одиночку'),
+    cover_url: cover('podnyatie-urovnya-v-odinochku'),
     status: 'completed',
     published: true,
     created_at: new Date(Date.now() - 86400000 * 10).toISOString(),
@@ -41,7 +51,7 @@ const INITIAL_TITLES: Title[] = [
     title: 'Магическая битва',
     author: 'Гэгэ Акутами',
     description: 'Старшеклассник Юдзи Итадори обладает выдающейся физической силой. Однажды в руки членов оккультного клуба попадает проклятый предмет высокой опасности...',
-    cover_url: generatePlaceholderCover('Магическая битва'),
+    cover_url: cover('magicheskaya-bitva'),
     status: 'ongoing',
     published: true,
     created_at: new Date(Date.now() - 86400000 * 5).toISOString(),
@@ -53,7 +63,7 @@ const INITIAL_TITLES: Title[] = [
     title: 'Клинок, рассекающий демонов',
     author: 'Коёхару Готогэ',
     description: 'Эпоха Тайсё. Тандзиро Камадо отправляется в путь, чтобы вернуть человеческий облик своей сестре Нэдзуко и уничтожить демона, погубившего их семью.',
-    cover_url: generatePlaceholderCover('Клинок, рассекающий демонов'),
+    cover_url: cover('klinok-rassekayushchiy-demonov'),
     status: 'completed',
     published: true,
     created_at: new Date(Date.now() - 86400000 * 2).toISOString(),
@@ -245,7 +255,8 @@ class LocalStore {
       title: input.title,
       author: input.author || null,
       description: input.description || null,
-      cover_url: input.cover_url || null,
+      // Как в Supabase-ветке titles.ts: чистим пробелы/пустоту, http→https.
+      cover_url: normalizeMediaUrl(input.cover_url),
       status: input.status || 'ongoing',
       published: input.published ?? false,
       created_at: new Date().toISOString(),
@@ -272,7 +283,8 @@ class LocalStore {
       title: input.title !== undefined ? input.title : current.title,
       author: input.author !== undefined ? input.author : current.author,
       description: input.description !== undefined ? input.description : current.description,
-      cover_url: input.cover_url !== undefined ? input.cover_url : current.cover_url,
+      cover_url:
+        input.cover_url !== undefined ? normalizeMediaUrl(input.cover_url) : current.cover_url,
       status: input.status !== undefined ? input.status : current.status,
       published: input.published !== undefined ? input.published : current.published,
       genres: genreObjects,

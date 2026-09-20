@@ -21,13 +21,23 @@ export function fullTitle(title?: string): string {
   return title ? `${title} — ${SITE_NAME}` : `${SITE_NAME} — Читалка манги онлайн`;
 }
 
-/** Картинка для og:image — только абсолютный http(s); data:-URL не выкладываем. */
+/** Кэшируемый плейсхолдер — og:image обязателен на каждой публичной странице. */
+const PLACEHOLDER_COVER_PATH = '/media/placeholder-cover.svg';
+
+/**
+ * Картинка для og:image — только абсолютный http(s).
+ * data:-URL в соцсетях/мессенджерах не работает, поэтому для тайтла без
+ * обложки (и для страниц вовсе без обложки) отдаём статический
+ * плейсхолдер с абсолютным SITE_URL — превью ссылки остаётся презентабельным.
+ * Обложка тайтла — относительный путь /media/covers/..., он же становится
+ * абсолютным og:image через SITE_URL.
+ */
 function shareImage(image?: string | null): string | undefined {
-  if (!image) return undefined;
-  if (image.startsWith('data:')) return undefined;
-  if (/^https?:\/\//i.test(image)) return image;
-  if (image.startsWith('/') && SITE_URL) return `${SITE_URL}${image}`;
-  return undefined;
+  if (image && !image.startsWith('data:')) {
+    if (/^https?:\/\//i.test(image)) return image;
+    if (image.startsWith('/') && SITE_URL) return `${SITE_URL}${image}`;
+  }
+  return SITE_URL ? `${SITE_URL}${PLACEHOLDER_COVER_PATH}` : undefined;
 }
 
 /**
@@ -49,6 +59,7 @@ export function seoForRoute(routeId: string, data?: any): SeoInput {
         description:
           'Разместите баннер между главами манги для активной аудитории читателей.',
       };
+
 
     case '/title/$slug':
     case '/title/$slug/': {
@@ -72,6 +83,13 @@ export function seoForRoute(routeId: string, data?: any): SeoInput {
         image: title.cover_url,
       };
     }
+
+    case '/s/$token':
+      // Персональная ссылка статуса: индексировать нечего и не нужно.
+      return {
+        title: 'Статус заявки',
+        noindex: true,
+      };
 
     default:
       // Всё, что внутри /admin, в поиске не нужно.

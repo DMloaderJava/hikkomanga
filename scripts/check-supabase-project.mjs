@@ -357,6 +357,96 @@ console.log('  · секреты функций и первый админ из 
 console.log(`      npx supabase secrets list --project-ref ${ref}`);
 console.log('      Dashboard → Authentication → Users + public.user_roles (роль owner/admin)');
 
+// ── 8. Публичные медиа ─────────────────────────────────────────────────────
+// Обложки и страницы глав видны анонимам (RLS + публичный бакет manga): если
+// URL из БД не отвечает 200, читатель видит плейсхолдер. Озвучки и оригиналы
+// лежат в приватных бакетах — их напрямую не проверить, см. check-covers.
+section('8. Публичные медиа отвечают 200 (обложки + страницы глав)');
+const MEDIA_PROBE_LIMIT = 20;
+const publicMediaQuery = async (table, select, limit) => {
+  const res = await api(
+    `/rest/v1/${table}?${new URLSearchParams({ select, limit: String(limit) })}`,
+    { method: 'GET' }
+  );
+  if (res.status !== 200) return { error: `HTTP ${res.status}` };
+  try {
+    return { rows: JSON.parse(res.text) };
+  } catch {
+    return { error: 'не JSON' };
+  }
+};
+
+const probeMediaUrl = async (urlValue) => {
+  try {
+    const res = await fetch(urlValue, {
+      method: 'HEAD',
+      headers: { apikey: anonKey },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(15000),
+    });
+    return res.status;
+  } catch {
+    return 0;
+  }
+};
+
+let mediaChecked = 0;
+let mediaBroken = 0;
+let mediaNetworkFail = 0;
+
+const titlesMedia = await publicMediaQuery('titles', 'slug,cover_url', MEDIA_PROBE_LIMIT);
+if (titlesMedia.error) {
+  warn(`titles недоступны (${titlesMedia.error}) — проверка медиа пропущена`);
+} else {
+  for (const t of titlesMedia.rows) {
+    const url = (t.cover_url || '').trim();
+    if (!url || url.startsWith('data:')) continue;
+    if (!/^https?:\/\//i.test(url)) {
+      bad(`обложка «${t.slug}» — не URL: ${url.slice(0, 60)}`, 'Перезалейте обложку в Storage через админку');
+      mediaBroken += 1;
+      continue;
+    }
+    mediaChecked += 1;
+    const status = await probeMediaUrl(url);
+    if (status >= 200 && status < 300) continue;
+    if (status === 0) {
+      mediaNetworkFail += 1;
+      warn(`обложка «${t.slug}» — сеть недоступна (${url.slice(0, 60)}…)`);
+    } else {
+      bad(`обложка «${t.slug}» → HTTP ${status}`, `${url.slice(0, 80)} — файла нет в Storage или ссылка мёртвая`);
+      mediaBroken += 1;
+    }
+  }
+
+  const pagesMedia = await publicMediaQuery('pages', 'chapter_id,image_url', MEDIA_PROBE_LIMIT);
+  if (pagesMedia.error) {
+    warn(`pages недоступны (${pagesMedia.error})`);
+  } else {
+    for (const p of pagesMedia.rows) {
+      const url = (p.image_url || '').trim();
+      if (!url || url.startsWith('data:') || !/^https?:\/\//i.test(url)) continue;
+      mediaChecked += 1;
+      const status = await probeMediaUrl(url);
+      if (status >= 200 && status < 300) continue;
+      if (status === 0) {
+        mediaNetworkFail += 1;
+      } else {
+        bad(`страница главы ${p.chapter_id.slice(0, 8)}… → HTTP ${status}`, url.slice(0, 80));
+        mediaBroken += 1;
+      }
+    }
+  }
+
+  if (mediaChecked === 0 && mediaBroken === 0) {
+    console.log('  · публичных медиа-URL в базе не найдено (пустой каталог — не ошибка)');
+  } else {
+    ok(`проверено медиа-URL: ${mediaChecked}, битых: ${mediaBroken}${mediaNetworkFail ? `, сеть не ответила: ${mediaNetworkFail}` : ''}`);
+  }
+  if (mediaBroken === 0 && mediaChecked > 0) {
+    notes.push('детальная таблица по ВСЕМ тайтлам: npm run check:covers');
+  }
+}
+
 // ── Итог ───────────────────────────────────────────────────────────────────
 section('Итог');
 if (problems.length === 0) {

@@ -124,6 +124,62 @@ email и пароль — это заглушка для локальной ра
 в коде нет. В продакшене всегда используется Supabase Auth; демо-fallback
 отключён автоматически при наличии `VITE_SUPABASE_URL` и ключа.
 
+### Обложки не грузятся (Covers troubleshooting)
+
+Обложки тайтлов — файлы репозитория: `public/media/covers/{slug}.webp`,
+в `titles.cover_url` хранится относительный путь вида `/media/covers/{slug}.webp`.
+Supabase Storage для обложек НЕ используется (Storage остался только для
+страниц глав и озвучек — см. подраздел ниже). Рендер обложки — только
+`src/components/manga/CoverImage.tsx`: пустой/битый путь → статический
+плейсхолдер `/media/placeholder-cover.svg` + `data-cover-error` в DOM
+(в dev — ещё и `console.warn('[cover] failed …')`, в прод — счётчик
+`cover_error` в Vercel Analytics). Если видите плейсхолдер — идите по цепочке:
+
+1. **Файл существует?** Проверьте наличие `public/media/covers/{имя}.webp`
+   локально и в git. Сид-обложки генерируются разово:
+   `npm i --no-save sharp && node scripts/generate-seed-covers.mjs`
+   (тот же визуальный генератор, что в демо-режиме, WebP 800px).
+2. **Путь в БД совпадает с именем файла?** Путь регистрозависим и должен
+   начинаться с `/`. Меняется в админке (TitleForm → «Обложка тайтла») или
+   руками в Table Editor. Внешние `http(s)://` URL больше не поддерживаются —
+   форма их отклоняет, а `normalizeMediaUrl` возвращает относительные пути
+   как есть.
+3. **og:image абсолютный в пререндере?** `src/lib/seo.ts` собирает
+   `og:image` как `SITE_URL + cover_url`; без `VITE_SITE_URL` абсолютной
+   ссылки не будет. Проверка: `grep og:image dist/title/{slug}/index.html`.
+
+Проверить ВСЕ тайтлы живой базы одним скриптом (без походов в сеть — только
+список slug + cover_url из БД и файловая система):
+
+```bash
+npm run check:covers
+# Exit: 0 — все файлы на месте; 1 — есть битые пути/файлы;
+#       2 — сама БД недоступна (переменные/сеть).
+```
+
+Вес каталога обложек ограничен бюджетом 500 kB (`scripts/check-budgets.mjs`,
+входит в `npm run build`): новая обложка — это осознанный коммит WebP-файла
+в `public/media/covers/`. CSP `img-src` при этом не менялся: обложки
+укладываются в `'self'`, страницы/озвучки — `*.supabase.co`; при полном
+переезде медиа в репозиторий CSP можно ужесточить.
+
+#### Страницы и озвучки (всё ещё Supabase Storage)
+
+Для `pages.image_url` и `chapter_voiceovers.audio_url` актуально прежнее:
+
+1. **Бакеты.** `manga` — public (миграция `00000000000002_storage_buckets.sql`),
+   `voiceovers` и `hikko-originals` — приватные. Приватный `manga` = 400/403
+   на каждую страницу главы.
+2. **RLS на `storage.objects`.** После пересоздания проекта политики бакетов
+   не появляются сами — SQL для сверки в разделе «Если проект Supabase
+   пересоздавали или удаляли».
+3. **Мёртвый ref.** URL указывает на удалённый проект → `LEGACY_SUPABASE_REFS`
+   в `src/lib/storageUrl.ts` переадресует его на текущий; файл должен быть
+   реально перенесён, иначе 404. Нормализация `http→https` и проверка CSP —
+   там же (`normalizeMediaUrl`).
+4. **Живая проверка доступности** — `npm run check:supabase` (раздел
+   «8. Публичные медиа») или HEAD-запросом по URL из БД.
+
 ## 6. Login Guard: обязательное подтверждение входа
 
 После верного пароля **вход ещё не открыт**. Владелец получает письмо на
@@ -389,3 +445,93 @@ Supabase-проект через коннектор — тогда код мен
   конфликтующих клиента.
 - Секреты для edge-функций хранятся в самом Supabase-проекте (Edge Functions →
   Secrets), а не в репозитории.
+
+## 9. Приём заявок на тайтл (анонимные заявки new_title)
+
+Аноним подаёт заявку через кнопку «+» → «Предложить тайтл» (капча, без
+регистрации). Заявка попадает в `admin_requests` (type=new_title, status=pending)
+с обложкой в бакете `submissions`. Owner решает в `/admin/requests`: approve
+создаёт **черновик** тайтла (published=false; занятый slug → предупреждение,
+черновика нет), reject требует причину, spam помечает нарушителя. Заявитель
+следит за статусом по персональной ссылке `/s/{token}` (токен — единственный
+ключ, payload по нему не отдаётся) и может отменить заявку в первые 5 минут.
+
+### 9.1 Ключи Cloudflare Turnstile (провайдер по умолчанию)
+
+1. dash.cloudflare.com → Turnstile → Add site: тип **Widget**, домен сайта
+   (при смене домена добавьте новый hostname в тот же widget — ключи менять
+   не нужно).
+2. Site key → Vercel `VITE_TURNSTILE_SITE_KEY` (пересборка).
+3. Secret key → `supabase secrets set TURNSTILE_SECRET_KEY=...`.
+
+### 9.2 Деплой edge-функций и секреты
+
+```bash
+# секреты (salt — случайная строка, минимум 32 символа):
+supabase secrets set RATE_LIMIT_SALT="$(openssl rand -hex 32)" \
+  TURNSTILE_SECRET_KEY="0x..." CAPTCHA_PROVIDER=turnstile
+
+supabase functions deploy submit-title
+supabase functions deploy get-submission
+supabase functions deploy notify-submitter   # опционально: email заявителю
+
+# для писем о решении (уже используемый Resend):
+supabase secrets set RESEND_API_KEY=re_... # OWNER_NOTIFY_FROM уже задан для login-notify
+```
+
+Лимиты (считает RPC `check_ip_rate_limit` по `sha256(ip+RATE_LIMIT_SALT)`,
+сырой IP нигде не хранится): 15/мин, 100/час, 300/сутки на заявку;
+`get-submission` — 30/мин на IP. Превышение → 429 + `Retry-After`.
+
+### 9.3 Миграции и cron
+
+```sql
+-- SQL Editor, по порядку:
+-- 00000000000010_submission_columns.sql   (колонки admin_requests + enum-значения + бакет submissions)
+-- 00000000000011_requests_rls_anon.sql    (anon INSERT запрещён — заявки пишет только edge)
+-- 00000000000012_rate_limit_ip.sql        (ip_rate_limit + check_ip_rate_limit)
+-- 00000000000013_submissions_cleanup.sql  (cleanup_rejected_submissions: rejected/spam >90д → purged)
+-- 00000000000014_new_title_trigger.sql    (apply_admin_request: ветка new_title, slugify_title)
+```
+
+Cron (Supabase Dashboard → Database → Cron или pg_cron):
+
+```sql
+select cron.schedule('cleanup-submissions', '0 4 * * *',
+  $$select public.cleanup_rejected_submissions()$$);
+select cron.schedule('cleanup-ip-rate-limit', '5 4 * * *',
+  $$select public.cleanup_ip_rate_limit()$$);
+```
+
+### 9.4 Переключение на hCaptcha (без правок кода)
+
+```bash
+supabase secrets set CAPTCHA_PROVIDER=hcaptcha \
+  HCAPTCHA_SECRET_KEY=0x...
+```
+и на Vercel: `VITE_CAPTCHA_PROVIDER=hcaptcha`, `VITE_HCAPTCHA_SITE_KEY=...`.
+CSP уже допускает оба провайдера (vercel.json: script/frame/connect-src).
+Ключи старого провайдера можно не удалять — они просто перестают читаться.
+
+### 9.5 Проверка и troubleshooting
+
+Локальные тесты логики (без Supabase): `npm run test:submissions`,
+диагностика базы: `npm run check:submissions` (с `SUPABASE_URL` +
+`SUPABASE_SERVICE_ROLE_KEY` в env — по живой базе).
+
+| Симптом | Причина / что делать |
+| --- | --- |
+| 429 при подаче | Исчерпан лимит IP (15/мин/100/час/300/сутки). Ждать окно или менять константы в `submit-title/index.ts`. Клиент показывает `Retry-After`. |
+| 400 `captcha_failed` | Токен капчи не принят: site/secret key от разных виджетов, домен не добавлен в Turnstile, или CAPTCHA_PROVIDER ≠ провайдеру site key. |
+| 403/401 от functions | Не задеплоены функции или не выставлены apikey/Authorization — см. раздел 5. |
+| «Обложка не подходит» | Файл >5 MB, не JPEG/PNG/WebP или соотношение не 3:4 (±10%). Проверка по magic-bytes, расширение не доверяется. |
+| Заявка есть, инбокс пуст | Owner видит pending через `listForOwner`; проверьте фильтры «В очереди/Решённые» и тип «Новые тайтлы». |
+| Approve, но «slug занят» | Тайтл с таким названием уже есть — заявка помечена `conflict=true`, черновик не создан. Пополните существующий тайтл главами. |
+| Черновик создан, обложка не видна | Обложка заявки лежит в бакете `submissions` (URL в payload.cover_url). Каталог ТЗ-2 показывает только `/media/covers/` — при публикации перенесите файл в репозиторий `public/media/covers/{slug}.webp` и обновите cover_url (см. раздел «Обложки»). |
+
+> **Не сделано сознательно:** перенос файла обложки из бакета `submissions`
+> в репозиторий при approve. Триггер SQL не имеет доступа к файловой системе
+> репозитория, а автоматическая загрузка в git из edge — отдельная инфра-
+> структура (webhook + CI). До ручного переноса у черновика в каталоге будет
+> плейсхолдер вместо обложки (CoverImage → placeholder), сам черновик работает.
+

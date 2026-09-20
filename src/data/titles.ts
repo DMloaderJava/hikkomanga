@@ -1,8 +1,7 @@
 import { getSupabase, isSupabaseConfigured } from './client';
 import { mockStore } from './mockStore';
 import { chapters as chaptersApi } from './chapters';
-import { storage } from './storage';
-import { repairSupabaseUrl } from '@/lib/storageUrl';
+import { normalizeMediaUrl } from '@/lib/storageUrl';
 import { type Title, type TitleInput, type Genre, SlugConflictError } from './types';
 
 function normalizeTitleRow(row: any): Title {
@@ -16,8 +15,9 @@ function normalizeTitleRow(row: any): Title {
     title: row.title,
     author: row.author ?? null,
     description: row.description ?? null,
-    // Чиним ссылки на storage удалённых Supabase-проектов (см. storageUrl.ts)
-    cover_url: repairSupabaseUrl(row.cover_url) ?? null,
+    // Нормализация обложки: trim, '' → null, http→https, мёртвые refs → текущий
+    // проект (см. storageUrl.ts). Единая точка — normalizeMediaUrl.
+    cover_url: normalizeMediaUrl(row.cover_url),
     status: row.status ?? 'ongoing',
     published: row.published ?? false,
     created_at: row.created_at || new Date().toISOString(),
@@ -114,7 +114,10 @@ export const titles = {
 
     if (isSupabaseConfigured) {
       const supabase = await getSupabase();
-      const { genre_ids, ...titleData } = input;
+      const { genre_ids, ...rawTitleData } = input;
+      // Обложку нормализуем ДО записи: в БД не должно попадать « HTTP://… »,
+      // пустых строк и внешних доменов, которые потом молча режет CSP.
+      const titleData = { ...rawTitleData, cover_url: normalizeMediaUrl(rawTitleData.cover_url) };
       const { data, error } = await supabase
         .from('titles')
         .insert(titleData)
@@ -153,7 +156,11 @@ export const titles = {
 
     if (isSupabaseConfigured) {
       const supabase = await getSupabase();
-      const { genre_ids, ...titleData } = input;
+      const { genre_ids, ...rawTitleData } = input;
+      const titleData =
+        'cover_url' in rawTitleData
+          ? { ...rawTitleData, cover_url: normalizeMediaUrl(rawTitleData.cover_url) }
+          : rawTitleData;
 
       if (Object.keys(titleData).length > 0) {
         const { error } = await supabase
@@ -218,6 +225,7 @@ export const titles = {
 
     // Строки глав/страниц в БД удалятся каскадно по внешним ключам, а вот
     // файлы в Storage и озвучки — нет, поэтому чистим их явно до удаления тайтла.
+    // Обложка — файл в репозитории (public/media/covers/), её удалять не нужно.
     const titleChapters = await chaptersApi.listByTitle(id, true);
     for (const chapter of titleChapters) {
       try {
@@ -225,12 +233,6 @@ export const titles = {
       } catch (e) {
         console.warn(`[titles] глава ${chapter.id} очищена не полностью:`, e);
       }
-    }
-
-    try {
-      await storage.deleteCover(titleToDelete.cover_url);
-    } catch (e) {
-      console.warn('[titles] не удалось удалить файл обложки:', e);
     }
 
     if (isSupabaseConfigured) {
