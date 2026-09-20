@@ -96,3 +96,5 @@ Lovable при подключении Supabase-проекта). Если пер�
 и деплой edge-функции описаны в **[SETUP_SUPABASE.md](./SETUP_SUPABASE.md)**.
 
 Шаблон переменных — в [`.env.example`](./.env.example).
+
+Загрузка страниц глав: JPG/JPEG, PNG, WebP, GIF (анимация сохраняется), AVIF, BMP, TIFF/TIF, HEIC/HEIF и PDF → WebP-страницы; лимиты и настройка описаны в [SETUP_SUPABASE.md](SETUP_SUPABASE.md#загрузка-страниц-глав).
