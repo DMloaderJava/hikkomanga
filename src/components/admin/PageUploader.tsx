@@ -1,200 +1,93 @@
 import { useState, useRef, useEffect } from 'react';
-import { storage } from '@/data/storage';
+import { storage, uploadErrorMessage } from '@/data/storage';
 import { pages as pagesApi } from '@/data/pages';
+import { FILE_ACCEPT } from '@/lib/imageFormats';
+import { prepareQueue, runQueue, type QueueFile } from '@/lib/pageUploadQueue';
+import { checkAbort } from '@/lib/pdfToPages';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
-import { UploadCloud, AlertCircle, FileImage, CheckCircle2 } from 'lucide-react';
+import { UploadCloud, FileImage } from 'lucide-react';
 
-interface PageUploaderProps {
-  chapterId: string;
-  currentPagesCount: number;
-  onPagesUploaded: () => void;
-}
-
-export function PageUploader({ chapterId, currentPagesCount, onPagesUploaded }: PageUploaderProps) {
-  const [isDragging, setIsDragging] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [statusText, setStatusText] = useState<string>('');
-  const [error, setError] = useState<string | null>(null);
-  const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-
-  // Prevent accidental window close or navigation during upload
+interface Props { chapterId: string; currentPagesCount: number; onPagesUploaded: () => void }
+interface Card extends QueueFile { controller: AbortController; preview?: string; status: string; progress: number; finished: boolean }
+export function PageUploader({chapterId, onPagesUploaded}: Props) {
+  const [cards,setCards] = useState<Card[]>([]);
+  const [uploading,setUploading] = useState(false);
+  const [error,setError] = useState('');
+  const [dragging,setDragging] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  const busy = useRef(false);
+  const active = useRef<Card[]>([]);
+  const previews = useRef<string[]>([]);
+  useEffect(() => () => {
+    active.current.forEach(c => c.controller.abort());
+    previews.current.forEach(url => URL.revokeObjectURL(url));
+  },[]);
   useEffect(() => {
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (uploading) {
-        e.preventDefault();
-        e.returnValue = 'Загрузка изображений еще не завершена. Вы уверены, что хотите выйти?';
-      }
-    };
-    window.addEventListener('beforeunload', handleBeforeUnload);
-    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
-  }, [uploading]);
-
-  const handleFiles = async (filesList: FileList | File[]) => {
-    setError(null);
-    setSuccessMessage(null);
-    const files = Array.from(filesList).filter((f) => f.type.startsWith('image/'));
-
-    if (files.length === 0) {
-      setError('Пожалуйста, выберите хотя бы одно изображение.');
-      return;
-    }
-
-    if (currentPagesCount + files.length > 100) {
-      setError(`Превышен лимит 100 страниц на главу (сейчас ${currentPagesCount}, пытаетесь добавить ${files.length})`);
-      return;
-    }
-
-    // Check size <= 10MB
-    const oversized = files.filter((f) => f.size > 10 * 1024 * 1024);
-    if (oversized.length > 0) {
-      setError(`Некоторые файлы превышают 10 МБ: ${oversized.map((f) => f.name).join(', ')}`);
-      return;
-    }
-
-    // Sort files naturally by name
-    files.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
-
-    setUploading(true);
-    setProgress(0);
-    setStatusText(`Обработка 1 из ${files.length}...`);
-
-    let completed = 0;
-    let failedCount = 0;
-    let startOrder = currentPagesCount + 1;
-
-    for (let i = 0; i < files.length; i++) {
-      const file = files[i];
-      const order = startOrder + i;
-      setStatusText(`Загрузка страницы ${i + 1} из ${files.length} (${file.name})...`);
-
-      try {
-        // Compress to 1600px WebP and upload to storage
-        const { image_url, original_url } = await storage.uploadPage(chapterId, file, order);
-
-        // Save page metadata
-        await pagesApi.create({
-          chapter_id: chapterId,
-          image_url,
-          original_url,
-          page_order: order,
-        });
-
-        completed++;
-      } catch (err: any) {
-        console.error(`Error uploading page ${file.name}:`, err);
-        failedCount++;
-      }
-
-      setProgress(Math.round(((i + 1) / files.length) * 100));
-    }
-
-    setUploading(false);
-    setProgress(0);
-    setStatusText('');
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
-    }
-
-    if (completed > 0) {
-      onPagesUploaded();
-      if (failedCount > 0) {
-        setError(`Успешно загружено страниц: ${completed}. Ошибок загрузки: ${failedCount}.`);
-      } else {
-        setSuccessMessage(`Успешно загружено ${completed} страниц!`);
-      }
-    } else if (failedCount > 0) {
-      setError('Не удалось загрузить изображения. Проверьте параметры и попробуйте снова.');
-    }
+    const beforeUnload = (e: BeforeUnloadEvent) => { if (uploading) { e.preventDefault(); e.returnValue = ''; } };
+    window.addEventListener('beforeunload',beforeUnload);
+    return () => window.removeEventListener('beforeunload',beforeUnload);
+  },[uploading]);
+  const patch = (index: number, update: Partial<Card>) => setCards(old => old.map((c,i) => i === index ? {...c,...update} : c));
+  const handleFiles = async (files: File[]) => {
+    if (busy.current || !files.length) return;
+    busy.current = true; setUploading(true); setError('');
+    try {
+      const queue = await prepareQueue(files);
+      previews.current.forEach(url => URL.revokeObjectURL(url)); previews.current = [];
+      const next = queue.map(item => {
+        const preview = item.kind && item.kind !== 'pdf' ? URL.createObjectURL(item.file) : undefined;
+        if (preview) previews.current.push(preview);
+        return {...item,preview,controller:new AbortController(),status:item.error || 'В очереди',progress:0,finished:!!item.error};
+      });
+      active.current = next; setCards(next);
+      const existing = await pagesApi.listByChapter(chapterId);
+      let order = Math.max(0,...existing.map(p => p.page_order)) + 1;
+      await runQueue(next,async (card,index) => {
+        if (card.error) return;
+        const signal = card.controller.signal;
+        checkAbort(signal);
+        const save = async (result: {image_url:string;original_url:string|null}) => {
+          try { await pagesApi.create({chapter_id:chapterId,...result,page_order:order}); }
+          catch (error) { await storage.deletePage(result.image_url, result.original_url); throw error; }
+          order++;
+          onPagesUploaded();
+        };
+        if (card.kind === 'pdf') {
+          patch(index,{status:'Разбор PDF…'});
+          for await (const page of storage.iteratePdfUploads(chapterId,card.file,order,(stage,done,total) => {
+            patch(index,{status:`${stage === 'parsing' ? 'Разбор PDF' : 'Загрузка страниц'} (${done}/${total})`,progress:Math.round(((stage === 'parsing' ? done - 0.5 : done) / total) * 100)});
+          },signal)) await save(page);
+        } else {
+          patch(index,{status:card.kind === 'animated-gif' ? 'Загрузка GIF без сжатия…' : 'Обработка и загрузка…'});
+          // Native image decoders and Supabase uploads are not interruptible; keep a completed upload.
+          const result = await storage.uploadPage(chapterId,card.file,order);
+          await save(result);
+          checkAbort(signal);
+        }
+        patch(index,{status:'Готово',progress:100,finished:true});
+      },(err,index) => patch(index,{status:uploadErrorMessage(err,next[index].file.name),error:uploadErrorMessage(err,next[index].file.name),finished:true}));
+    } catch (err) { setError((err as Error).message); }
+    finally { busy.current = false; setUploading(false); if (input.current) input.current.value = ''; }
   };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-    if (e.dataTransfer.files) {
-      handleFiles(e.dataTransfer.files);
-    }
-  };
-
-  return (
-    <div className="space-y-4">
-      {error && (
-        <div className="flex items-center gap-2 rounded-xl border border-red-800/80 bg-red-950/40 p-3.5 text-xs text-red-400">
-          <AlertCircle className="h-4 w-4 shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
-
-      {successMessage && (
-        <div className="flex items-center gap-2 rounded-xl border border-emerald-800/80 bg-emerald-950/40 p-3.5 text-xs text-emerald-400">
-          <CheckCircle2 className="h-4 w-4 shrink-0" />
-          <span>{successMessage}</span>
-        </div>
-      )}
-
-      <div
-        onDragOver={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          setIsDragging(true);
-        }}
-        onDragLeave={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          setIsDragging(false);
-        }}
-        onDrop={handleDrop}
-        onClick={(e) => {
-          // Trigger file input if clicking container directly
-          if (!uploading) {
-            fileInputRef.current?.click();
-          }
-        }}
-        className={`relative flex flex-col items-center justify-center rounded-2xl border-2 border-dashed p-8 text-center transition-all cursor-pointer ${
-          isDragging
-            ? 'border-rose-500 bg-rose-950/20 scale-[0.99]'
-            : 'border-neutral-800 bg-neutral-900/40 hover:border-neutral-700 hover:bg-neutral-900/80'
-        } ${uploading ? 'pointer-events-none opacity-60' : ''}`}
-      >
-        <input
-          ref={fileInputRef}
-          type="file"
-          multiple
-          accept="image/*"
-          className="hidden"
-          onChange={(e) => e.target.files && handleFiles(e.target.files)}
-        />
-
-        <div className="flex h-14 w-14 items-center justify-center rounded-full bg-neutral-800 text-rose-400 mb-3 border border-neutral-700">
-          <UploadCloud className="h-7 w-7" />
-        </div>
-
-        <p className="text-sm font-semibold text-white">
-          Перетащите файлы сюда или нажмите для выбора
-        </p>
-        <p className="mt-1 text-xs text-neutral-400">
-          Поддерживаются JPG, PNG, WebP (до 10 МБ на файл). Авто-сжатие до 1600px WebP.
-        </p>
-        <p className="mt-2 text-[11px] font-medium text-rose-400">
-          Максимум 100 страниц на главу ({currentPagesCount}/100)
-        </p>
+  return <div className="space-y-4">
+    {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
+    <button type="button" disabled={uploading} onClick={() => input.current?.click()}
+      onDragOver={e => {e.preventDefault();setDragging(true);}} onDragLeave={() => setDragging(false)}
+      onDrop={e => {e.preventDefault();setDragging(false);void handleFiles(Array.from(e.dataTransfer.files));}}
+      className={`w-full rounded-2xl border-2 border-dashed p-8 text-center disabled:opacity-60 ${dragging ? 'border-rose-500' : 'border-neutral-700'}`}>
+      <UploadCloud className="mx-auto mb-3 h-8 w-8 text-rose-400" />
+      <span className="block">Перетащите файлы сюда или нажмите для выбора</span>
+      <span className="mt-2 block text-xs text-neutral-400">JPG, PNG, WebP, GIF, AVIF, BMP, TIFF, HEIC/HEIF — до 20 MB. PDF — до 200 MB. До 100 файлов за раз.</span>
+    </button>
+    <input ref={input} type="file" multiple disabled={uploading} accept={FILE_ACCEPT} className="hidden" onChange={e => e.target.files && void handleFiles(Array.from(e.target.files))} />
+    {cards.map((card,i) => <div key={i} className="flex items-start gap-3 rounded-xl border border-neutral-800 p-4">
+      {card.preview ? <img src={card.preview} alt="" className="h-16 w-12 object-contain" onError={e => {e.currentTarget.style.display = 'none';}} /> : <FileImage className="h-12 w-12 shrink-0 text-neutral-500" />}
+      <div className="min-w-0 flex-1 space-y-2"><p className="break-all text-sm">{card.file.name}</p>
+        <p aria-live="polite" className={`text-xs ${card.error ? 'text-red-400' : 'text-neutral-400'}`}>{card.status}</p>
+        <Progress value={card.progress} />
       </div>
-
-      {uploading && (
-        <div className="rounded-xl border border-neutral-800 bg-neutral-900 p-4 space-y-2.5">
-          <div className="flex items-center justify-between text-xs font-medium text-neutral-300">
-            <span className="flex items-center gap-2">
-              <FileImage className="h-4 w-4 text-rose-500 animate-pulse" />
-              {statusText || 'Загрузка изображений...'}
-            </span>
-            <span>{progress}%</span>
-          </div>
-          <Progress value={progress} />
-        </div>
-      )}
-    </div>
-  );
+      {!card.finished && <Button type="button" variant="outline" size="sm" onClick={() => {card.controller.abort();patch(i,{status:'Отмена…'});}}>Отменить</Button>}
+    </div>)}
+  </div>;
 }

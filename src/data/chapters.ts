@@ -138,9 +138,7 @@ export const chapters = {
     }
 
     const chapterPages = await pagesApi.listByChapter(id);
-    await Promise.allSettled(
-      chapterPages.map((page) => storage.deletePage(page.image_url, page.original_url))
-    );
+    await storage.deletePages(chapterPages);
 
     if (isSupabaseConfigured) {
       const supabase = await getSupabase();

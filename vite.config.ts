@@ -1,3 +1,5 @@
+import { localPdfAssets } from './build-plugins/pdf-assets.ts';
+import { localHeicWorker } from './build-plugins/heic-worker.ts';
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import { TanStackRouterVite } from '@tanstack/router-plugin/vite';
@@ -97,6 +99,8 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [
+      localHeicWorker(),
+      localPdfAssets(),
       TanStackRouterVite({
         target: 'react',
         autoCodeSplitting: true,
