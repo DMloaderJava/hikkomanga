@@ -29,6 +29,7 @@ import { Route as AdminTitlesIdIndexRouteImport } from './routes/admin.titles.$i
 import { Route as AdminTitlesIdChaptersRouteImport } from './routes/admin.titles.$id.chapters'
 import { Route as TitleSlugChapterNumberRouteImport } from './routes/title.$slug.chapter.$number'
 import { Route as AdminTitlesIdChaptersCidRouteImport } from './routes/admin.titles.$id.chapters.$cid'
+import { Route as AdminTitlesIdChaptersCidPagesRouteImport } from './routes/admin.titles.$id.chapters.$cid_.pages'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -131,6 +132,12 @@ const AdminTitlesIdChaptersCidRoute =
     path: '/$cid',
     getParentRoute: () => AdminTitlesIdChaptersRoute,
   } as any)
+const AdminTitlesIdChaptersCidPagesRoute =
+  AdminTitlesIdChaptersCidPagesRouteImport.update({
+    id: '/$cid_/pages',
+    path: '/$cid/pages',
+    getParentRoute: () => AdminTitlesIdChaptersRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -153,6 +160,7 @@ export interface FileRoutesByFullPath {
   '/title/$slug/chapter/$number': typeof TitleSlugChapterNumberRoute
   '/admin/titles/$id/': typeof AdminTitlesIdIndexRoute
   '/admin/titles/$id/chapters/$cid': typeof AdminTitlesIdChaptersCidRoute
+  '/admin/titles/$id/chapters/$cid/pages': typeof AdminTitlesIdChaptersCidPagesRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -171,6 +179,7 @@ export interface FileRoutesByTo {
   '/title/$slug/chapter/$number': typeof TitleSlugChapterNumberRoute
   '/admin/titles/$id': typeof AdminTitlesIdIndexRoute
   '/admin/titles/$id/chapters/$cid': typeof AdminTitlesIdChaptersCidRoute
+  '/admin/titles/$id/chapters/$cid/pages': typeof AdminTitlesIdChaptersCidPagesRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -194,6 +203,7 @@ export interface FileRoutesById {
   '/title/$slug/chapter/$number': typeof TitleSlugChapterNumberRoute
   '/admin/titles/$id/': typeof AdminTitlesIdIndexRoute
   '/admin/titles/$id/chapters/$cid': typeof AdminTitlesIdChaptersCidRoute
+  '/admin/titles/$id/chapters/$cid_/pages': typeof AdminTitlesIdChaptersCidPagesRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -218,6 +228,7 @@ export interface FileRouteTypes {
     | '/title/$slug/chapter/$number'
     | '/admin/titles/$id/'
     | '/admin/titles/$id/chapters/$cid'
+    | '/admin/titles/$id/chapters/$cid/pages'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -236,6 +247,7 @@ export interface FileRouteTypes {
     | '/title/$slug/chapter/$number'
     | '/admin/titles/$id'
     | '/admin/titles/$id/chapters/$cid'
+    | '/admin/titles/$id/chapters/$cid/pages'
   id:
     | '__root__'
     | '/'
@@ -258,6 +270,7 @@ export interface FileRouteTypes {
     | '/title/$slug/chapter/$number'
     | '/admin/titles/$id/'
     | '/admin/titles/$id/chapters/$cid'
+    | '/admin/titles/$id/chapters/$cid_/pages'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -410,15 +423,24 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AdminTitlesIdChaptersCidRouteImport
       parentRoute: typeof AdminTitlesIdChaptersRoute
     }
+    '/admin/titles/$id/chapters/$cid_/pages': {
+      id: '/admin/titles/$id/chapters/$cid_/pages'
+      path: '/$cid/pages'
+      fullPath: '/admin/titles/$id/chapters/$cid/pages'
+      preLoaderRoute: typeof AdminTitlesIdChaptersCidPagesRouteImport
+      parentRoute: typeof AdminTitlesIdChaptersRoute
+    }
   }
 }
 
 interface AdminTitlesIdChaptersRouteChildren {
   AdminTitlesIdChaptersCidRoute: typeof AdminTitlesIdChaptersCidRoute
+  AdminTitlesIdChaptersCidPagesRoute: typeof AdminTitlesIdChaptersCidPagesRoute
 }
 
 const AdminTitlesIdChaptersRouteChildren: AdminTitlesIdChaptersRouteChildren = {
   AdminTitlesIdChaptersCidRoute: AdminTitlesIdChaptersCidRoute,
+  AdminTitlesIdChaptersCidPagesRoute: AdminTitlesIdChaptersCidPagesRoute,
 }
 
 const AdminTitlesIdChaptersRouteWithChildren =
