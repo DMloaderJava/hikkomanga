@@ -1,19 +1,25 @@
 import { Link } from '@tanstack/react-router';
 import type { Title } from '@/data/types';
 import { BookOpen } from 'lucide-react';
+import { CoverImage } from './CoverImage';
 
 function CoverArt({ title }: { title: Title }) {
   if (title.cover_url) {
     return (
-      <img
+      <CoverImage
         src={title.cover_url}
-        alt={title.title}
+        title={title.title}
         className="h-full w-full object-cover object-center transition-transform duration-500 ease-out group-hover:scale-110"
         loading="lazy"
+        fallback={<CoverFallback title={title} />}
       />
     );
   }
 
+  return <CoverFallback title={title} />;
+}
+
+function CoverFallback({ title }: { title: Title }) {
   const hue = title.title.split('').reduce((acc, ch) => acc + ch.charCodeAt(0), 0) % 360;
 
   return (

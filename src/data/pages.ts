@@ -1,7 +1,13 @@
 import { getSupabase, isSupabaseConfigured } from './client';
 import { mockStore } from './mockStore';
 import { storage } from './storage';
+import { repairSupabaseUrl } from '@/lib/storageUrl';
 import type { Page, PageInput } from './types';
+
+/** Чиним ссылки на storage удалённых Supabase-проектов (см. storageUrl.ts). */
+function repairPageRow(row: Page): Page {
+  return { ...row, image_url: repairSupabaseUrl(row.image_url) ?? row.image_url };
+}
 
 export const pages = {
   async listByChapter(chapterId: string): Promise<Page[]> {
@@ -15,7 +21,7 @@ export const pages = {
           .order('page_order', { ascending: true });
 
         if (!error && data) {
-          return data;
+          return data.map(repairPageRow);
         }
       } catch {
         // Fallback
@@ -35,7 +41,7 @@ export const pages = {
           .maybeSingle();
 
         if (!error && data) {
-          return data;
+          return repairPageRow(data);
         }
       } catch {
         // Fallback

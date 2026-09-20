@@ -2,6 +2,7 @@ import { getSupabase, isSupabaseConfigured } from './client';
 import { mockStore } from './mockStore';
 import { chapters as chaptersApi } from './chapters';
 import { storage } from './storage';
+import { repairSupabaseUrl } from '@/lib/storageUrl';
 import { type Title, type TitleInput, type Genre, SlugConflictError } from './types';
 
 function normalizeTitleRow(row: any): Title {
@@ -15,7 +16,8 @@ function normalizeTitleRow(row: any): Title {
     title: row.title,
     author: row.author ?? null,
     description: row.description ?? null,
-    cover_url: row.cover_url ?? null,
+    // Чиним ссылки на storage удалённых Supabase-проектов (см. storageUrl.ts)
+    cover_url: repairSupabaseUrl(row.cover_url) ?? null,
     status: row.status ?? 'ongoing',
     published: row.published ?? false,
     created_at: row.created_at || new Date().toISOString(),

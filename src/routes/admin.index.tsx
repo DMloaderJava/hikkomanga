@@ -3,6 +3,7 @@ import { titles as titlesApi } from '@/data/titles';
 import { genres as genresApi } from '@/data/genres';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { CoverImage } from '@/components/manga/CoverImage';
 import { Library, BookOpen, Tag, Plus, Eye, ArrowRight } from 'lucide-react';
 import type { Title, Genre } from '@/data/types';
 
@@ -121,7 +122,7 @@ function AdminDashboardPage() {
               <div key={t.id} className="flex items-center justify-between p-4 hover:bg-neutral-800/40 transition-colors">
                 <div className="flex items-center gap-3">
                   <div className="h-12 w-9 rounded overflow-hidden bg-neutral-950 shrink-0 border border-neutral-800">
-                    {t.cover_url && <img src={t.cover_url} alt={t.title} className="h-full w-full object-cover" />}
+                    <CoverImage src={t.cover_url} title={t.title} className="h-full w-full object-cover" />
                   </div>
                   <div>
                     <h3 className="font-bold text-white text-sm">{t.title}</h3>
