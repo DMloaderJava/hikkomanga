@@ -14,6 +14,7 @@
     "test": "node scripts/check-verification.mjs && node --test scripts/unit-verification.mjs && node scripts/smoke-data-layer.mjs && node scripts/unit-auth-notify.mjs && node scripts/unit-covers.mjs",
     "test:verification": "node scripts/check-verification.mjs",
     "test:unit": "node scripts/unit-auth-notify.mjs",
+    "test:ui": "node scripts/unit-admin-buttons.mjs",
     "test:covers": "node scripts/unit-covers.mjs",
     "test:smoke": "node scripts/smoke-data-layer.mjs",
     "test:verification:unit": "node --test scripts/unit-verification.mjs",
