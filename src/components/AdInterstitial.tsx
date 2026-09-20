@@ -63,6 +63,7 @@ export function AdInterstitial({ onDismiss, onNext }: AdInterstitialProps) {
           alt={ad.title}
           className="w-full max-h-40 object-cover"
           loading="lazy"
+          referrerPolicy="no-referrer"
           onError={(e) => {
             (e.currentTarget as HTMLImageElement).style.display = 'none';
           }}

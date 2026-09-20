@@ -19,7 +19,7 @@
         { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' https://va.vercel-scripts.com https://challenges.cloudflare.com https://js.hcaptcha.com https://newassets.hcaptcha.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.supabase.co https://*.supabase.in https://challenges.cloudflare.com https://newassets.hcaptcha.com; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in https://va.vercel-scripts.com https://vitals.vercel-insights.com https://challenges.cloudflare.com https://hcaptcha.com; frame-src https://challenges.cloudflare.com https://hcaptcha.com; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+          "value": "default-src 'self'; script-src 'self' https://va.vercel-scripts.com https://challenges.cloudflare.com https://js.hcaptcha.com https://newassets.hcaptcha.com; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.supabase.in https://va.vercel-scripts.com https://vitals.vercel-insights.com https://challenges.cloudflare.com https://hcaptcha.com; frame-src https://challenges.cloudflare.com https://hcaptcha.com; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
         },
         {
           "key": "Permissions-Policy",

@@ -98,6 +98,9 @@ export function CoverImage({
       fetchPriority={priority ? 'high' : undefined}
       className={imgClassName}
       draggable={false}
+      // Внешние обложки (по URL) часто лежат на хостингах с хотлинк-защитой —
+      // без Referer они отдают картинку, а с ним могут вернуть 403.
+      referrerPolicy="no-referrer"
       onError={() => {
         reportCoverError(title, src);
         setFailed(true);

@@ -62,6 +62,8 @@ function VerticalReaderPage({ page, index, altPrefix }: VerticalReaderPageProps)
           fetchPriority={index === 0 ? 'high' : 'auto'}
           decoding={index === 0 ? 'sync' : 'async'}
           loading={index === 0 ? 'eager' : 'lazy'}
+          // Страницы могут быть внешними URL с хотлинк-защитой по Referer.
+          referrerPolicy="no-referrer"
           className="w-full h-auto select-none block bg-neutral-900"
           draggable={false}
           onLoad={(e) => {
