@@ -126,7 +126,9 @@ Deno.serve(async (req) => {
         p_ip_hash: await crypto.subtle
           .digest('SHA-256', new TextEncoder().encode(ip + salt))
           .then((h) => Array.from(new Uint8Array(h), (b) => b.toString(16).padStart(2, '0')).join('')),
-        p_limit,
+        // Имя параметра RPC: JS-переменная называется limit (параметр checkLimit),
+        // поэтому сокращённая запись `p_limit` давала ReferenceError в Deno.
+        p_limit: limit,
         p_window_seconds: windowSeconds,
       });
       if (error) {
