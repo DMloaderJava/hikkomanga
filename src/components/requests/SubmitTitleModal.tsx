@@ -1,6 +1,9 @@
 import { useRef, useState } from 'react';
 import { Link } from '@tanstack/react-router';
 import { submissions, prevalidatePayload, type SubmitTitlePayload } from '@/data/submissions';
+import { prepareChaptersForSubmit } from '@/data/chapterSubmissions';
+import { ChaptersEditor, type EditorChapter } from './ChaptersEditor';
+import { MAX_CHAPTERS_PER_REQUEST, MAX_PAGES_PER_CHAPTER } from '../../../supabase/functions/_shared/chapterSubmissionCore';
 import { CaptchaWidget } from './CaptchaWidget';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,7 +15,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog';
-import { CheckCircle, Send, Loader2, AlertCircle, ImageIcon } from 'lucide-react';
+import { CheckCircle, Send, Loader2, AlertCircle, ImageIcon, ChevronDown, ChevronRight, Layers } from 'lucide-react';
 
 /**
  * Форма анонимной заявки на тайтл (по образцу MangaLib): обязательные
@@ -37,8 +40,12 @@ export function SubmitTitleModal({ open, onOpenChange }: SubmitTitleModalProps) 
   const [cover, setCover] = useState<File | null>(null);
   const [coverPreview, setCoverPreview] = useState<string | null>(null);
   const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  /** Collapsed-секция «Главы»: заявка на тайтл сразу с главами (ТЗ). */
+  const [chaptersOpen, setChaptersOpen] = useState(false);
+  const [chapters, setChapters] = useState<EditorChapter[]>([]);
 
   const [sending, setSending] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [topError, setTopError] = useState<string | null>(null);
   const [successToken, setSuccessToken] = useState<string | null>(null);
@@ -57,8 +64,11 @@ export function SubmitTitleModal({ open, onOpenChange }: SubmitTitleModalProps) 
     setCover(null);
     setCoverPreview(null);
     setCaptchaToken(null);
+    setChapters([]);
+    setChaptersOpen(false);
     setFieldErrors({});
     setTopError(null);
+    setProgress(null);
     setSuccessToken(null);
   };
 
@@ -140,13 +150,43 @@ export function SubmitTitleModal({ open, onOpenChange }: SubmitTitleModalProps) 
 
     setSending(true);
     setFieldErrors({});
+
+    // Главы необязательны: пустой список = заявка как раньше (без файлов глав).
+    const activeChapters = chapters.filter(
+      (ch) => ch.pages.length > 0 || ch.pdf || ch.name.trim() || ch.number.trim()
+    );
+    let preparedChapters;
+    if (activeChapters.length > 0) {
+      setProgress('Обрабатываем страницы…');
+      try {
+        const prepared = await prepareChaptersForSubmit(activeChapters, (n, done, total) =>
+          setProgress(`Глава ${n}: разбор PDF (${done}/${total})`)
+        );
+        if (!prepared.ok) {
+          setTopError(prepared.error);
+          setSending(false);
+          setProgress(null);
+          return;
+        }
+        preparedChapters = prepared.chapters;
+      } catch (err) {
+        setTopError(err instanceof Error ? err.message : 'Не удалось подготовить главы');
+        setSending(false);
+        setProgress(null);
+        return;
+      }
+    }
+
+    setProgress('Загружаем…');
     const result = await submissions.submitTitle({
       payload,
       cover,
       captchaToken,
       email: email.trim() || undefined,
+      chapters: preparedChapters,
     });
     setSending(false);
+    setProgress(null);
 
     if (result.ok) {
       setSuccessToken(result.token ?? null);
@@ -326,6 +366,45 @@ export function SubmitTitleModal({ open, onOpenChange }: SubmitTitleModalProps) 
               </div>
             </div>
 
+            <div className="rounded-xl border border-neutral-800 bg-neutral-900/50">
+              <button
+                type="button"
+                aria-expanded={chaptersOpen}
+                onClick={() => setChaptersOpen((v) => !v)}
+                className="flex w-full items-center gap-2 px-3 py-2.5 text-left text-sm text-neutral-200"
+              >
+                {chaptersOpen ? (
+                  <ChevronDown className="h-4 w-4 text-neutral-500" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 text-neutral-500" />
+                )}
+                <Layers className="h-4 w-4 text-emerald-400" />
+                <span className="flex-1">Главы</span>
+                <span className="text-xs text-neutral-500">
+                  {chapters.length > 0
+                    ? `${chapters.length} шт.`
+                    : 'необязательно, до ' + MAX_CHAPTERS_PER_REQUEST}
+                </span>
+              </button>
+              {chaptersOpen && (
+                <div className="space-y-2 border-t border-neutral-800 p-3">
+                  <p className="text-[11px] text-neutral-500">
+                    Приложите главы сразу с тайтлом — модератор создаст их
+                    черновиками после одобрения (не больше {MAX_CHAPTERS_PER_REQUEST} глав
+                    и {MAX_PAGES_PER_CHAPTER} страниц в главе).
+                  </p>
+                  <ChaptersEditor
+                    maxChapters={MAX_CHAPTERS_PER_REQUEST}
+                    maxPagesPerChapter={MAX_PAGES_PER_CHAPTER}
+                    value={chapters}
+                    onChange={setChapters}
+                    disabled={sending}
+                  />
+                  {fieldError('chapters')}
+                </div>
+              )}
+            </div>
+
             <div>
               <Label htmlFor="st-email">Email для уведомления <span className="text-neutral-500">(необязательно)</span></Label>
               <Input
@@ -345,7 +424,7 @@ export function SubmitTitleModal({ open, onOpenChange }: SubmitTitleModalProps) 
               <Button type="submit" disabled={sending} className="min-w-[140px] gap-2">
                 {sending ? (
                   <>
-                    <Loader2 className="h-4 w-4 animate-spin" /> Отправка…
+                    <Loader2 className="h-4 w-4 animate-spin" /> {progress ?? 'Отправка…'}
                   </>
                 ) : (
                   <>

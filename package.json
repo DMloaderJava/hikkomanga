@@ -11,7 +11,7 @@
     "sitemap": "node scripts/generate-sitemap.mjs",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "node scripts/check-verification.mjs && node --test scripts/unit-verification.mjs && node scripts/smoke-data-layer.mjs && node scripts/unit-auth-notify.mjs && node scripts/unit-covers.mjs && node scripts/unit-admin-links.mjs && npm run test:page-formats && npm run test:pdf",
+    "test": "node scripts/check-verification.mjs && node --test scripts/unit-verification.mjs && node scripts/smoke-data-layer.mjs && node scripts/unit-auth-notify.mjs && node scripts/unit-covers.mjs && node scripts/unit-admin-links.mjs && npm run test:page-formats && npm run test:pdf && npm run test:chapters-import && npm run test:submit-chapters",
     "test:verification": "node scripts/check-verification.mjs",
     "test:unit": "node scripts/unit-auth-notify.mjs",
     "test:ui": "node scripts/unit-admin-buttons.mjs",
@@ -25,7 +25,9 @@
     "check:submissions": "node scripts/check-submissions.mjs",
     "test:links": "node scripts/unit-admin-links.mjs",
     "test:page-formats": "node scripts/unit-page-formats.mjs",
-    "test:pdf": "node scripts/unit-pdf-to-pages.mjs"
+    "test:pdf": "node scripts/unit-pdf-to-pages.mjs",
+    "test:chapters-import": "node scripts/unit-chapters-import.mjs",
+    "test:submit-chapters": "node scripts/unit-submit-chapters.mjs"
   },
   "repository": {
     "type": "git",
@@ -75,6 +77,6 @@
     "vite": "^8.3.0"
   },
   "engines": {
-    "node": ">=22.12.0"
+    "node": "22.x"
   }
 }

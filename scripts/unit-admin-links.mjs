@@ -90,6 +90,37 @@ check(
   routeFiles.includes('admin.titles.$id.chapters.$cid_.pages.tsx')
 );
 
+// ── Кнопка «Импорт глав» (массовый импорт из CSV) ──────────────────────────
+check(
+  'Есть роут .../chapters/import',
+  routeFiles.includes('admin.titles.$id.chapters.import.tsx')
+);
+
+const importButtonIdx = chaptersSrc.indexOf('Импорт глав');
+const importLinkBefore = chaptersSrc.lastIndexOf('<Link', importButtonIdx);
+const importLink = chaptersSrc.slice(importLinkBefore, importButtonIdx);
+check(
+  'Кнопка «Импорт глав» ведёт на $id/chapters/import с params',
+  importButtonIdx > 0 &&
+    importLink.includes('/admin/titles/$id/chapters/import') &&
+    /params=\{\{[^}]*id:\s*title\.id/.test(importLink),
+  importLink.replace(/\s+/g, ' ').trim().slice(0, 140)
+);
+
+const importRouteSrc = readFileSync('src/routes/admin.titles.$id.chapters.import.tsx', 'utf8');
+check(
+  'Лоадер импорта глав проверяет params через assertEntityId',
+  importRouteSrc.includes('assertEntityId(params.id')
+);
+check(
+  'Импорт глав создаёт главы черновиками (published: false)',
+  /published:\s*false/.test(importRouteSrc)
+);
+check(
+  'Конфликт номера главы — пропуск с отчётом, а не падение',
+  importRouteSrc.includes('DuplicateChapterError') && /пропущена/.test(importRouteSrc)
+);
+
 // ── 2. Рантайм-проверка валидатора параметров ──────────────────────────────
 const { isValidEntityId, assertEntityId } = await import('../src/lib/routeParams.ts').catch(
   async () => {

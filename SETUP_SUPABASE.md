@@ -536,6 +536,146 @@ CSP уже допускает оба провайдера (vercel.json: script/f
 > плейсхолдер вместо обложки (CoverImage → placeholder), сам черновик работает.
 
 
+## 10. Заявки на главы (new_chapters) и массовый импорт глав
+
+Три связанных флоу используют один редактор глав (`src/components/requests/ChaptersEditor.tsx`):
+
+1. **`/admin/titles/$id/chapters/import`** — владелец импортирует главы из CSV
+   (`number,name[,description]`) и привязывает страницы по именам файлов
+   (`{гл}.{стр}.{ext}`, `{гл}/{стр}.{ext}`, `{гл}-{стр}.{ext}`, `{гл}.pdf`).
+   Супabase-миграций не требует: работают обычные `chapters`/`pages` и бакет `manga`.
+2. **«Предложить главу»** (публичное меню «+») — анонимная заявка на 1–5 глав
+   опубликованного тайтла через edge `submit-chapters`.
+3. **«Предложить тайтл» + главы** — та же заявка `new_title` с приложенными
+   главами (edge `submit-title` принимает поле `chapters` и файловые части).
+
+### 10.1 Миграция
+
+```sql
+-- supabase/migrations/00000000000015_chapter_submissions.sql
+DO $$ BEGIN
+  ALTER TYPE public.request_type ADD VALUE IF NOT EXISTS 'new_chapters';
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+alter table public.admin_requests
+  add column if not exists finalized_at timestamptz,
+  add column if not exists finalized_error text;
+
+alter table public.chapters
+  add column if not exists description text;
+
+create index if not exists admin_requests_type_status_idx
+  on public.admin_requests (type, status, created_at desc);
+```
+
+Бакет `submissions` и `check_ip_rate_limit` уже созданы миграциями 10 и 12 —
+новых объектов хранения не нужно.
+
+> `ALTER TYPE ... ADD VALUE` нельзя использовать в той же транзакции, где новое
+> значение применяется. Если накатываете миграцию руками в SQL Editor, выполните
+> DO-блок отдельным запросом, а остальные строки — следующим.
+
+### 10.2 Деплой edge-функций
+
+```bash
+supabase functions deploy submit-chapters              # подача заявки на главы
+supabase functions deploy finalize-chapter-submission  # перенос файлов при approve
+supabase functions deploy submit-title                 # перезалить: теперь принимает главы
+```
+
+Секреты те же, что для `submit-title`: `RATE_LIMIT_SALT`,
+`TURNSTILE_SECRET_KEY` (или `HCAPTCHA_SECRET_KEY` + `CAPTCHA_PROVIDER=hcaptcha`).
+Новых секретов не требуется.
+
+**Порядок:** сначала миграция 15, затем деплой функций. До применения миграции
+`submit-chapters` упадёт на INSERT (`type new_chapters` не существует в enum), а
+`finalize-chapter-submission` — на UPDATE `finalized_at`.
+
+### 10.3 Как это работает
+
+| Шаг | Что происходит |
+| --- | --- |
+| Подача | `submit-chapters`: rate limit 3/мин · 30/час · 100/сутки по `sha256(ip + ':chapters' + RATE_LIMIT_SALT)` → согласие → капча → payload → тайтл опубликован → файлы → upload в `submissions/{token}/ch-{n}/page-{m}.{ext}` → INSERT `admin_requests` (`type='new_chapters'`, `published` глав ещё нет) |
+| Модерация | `/admin/requests`, тип «Заявки на главы»: тайтл, главы с превью первой страницы, счётчики страниц и объёма, Approve/Reject/Spam |
+| Approve | UPDATE статуса (триггер `apply_admin_request` для `new_chapters` ничего не делает) → клиент зовёт `finalize-chapter-submission` |
+| Финал | Для каждой главы: INSERT `chapters` (`published=false`, при занятом номере — следующий свободный) → download из `submissions` → upload в `manga/{chapterId}/…` → INSERT `pages` → удаление исходников → `finalized_at` |
+
+Идемпотентность: `finalized_at IS NOT NULL` → повторный вызов возвращает
+`skipped=true` и ничего не создаёт. Сбой на k-й главе оставляет заявку
+`approved` с `finalized_error` — в карточке появляется кнопка
+**«Завершить импорт»**, повтор продолжает с k-й главы.
+
+Прогресс пишется в payload **двумя чекпоинтами на главу**, и это не случайность:
+
+1. `finalized_chapter_id` + `finalized_done: false` — сразу после INSERT главы,
+   **до** загрузки страниц. Без этого сбой на копировании страницы оставил бы
+   главу в БД без отметки, и повтор создал бы вторую (первая — сирота без страниц).
+2. `finalized_pages` + `finalized_done: true` — после всех страниц главы.
+
+Пути уже перенесённых страниц хранятся в `payload.chapters[i].finalized_source_paths`,
+поэтому повтор не копирует их дважды, а `page_order` продолжает плотную
+нумерацию 1..N. Исходники перенесённых страниц удаляются и при повторе.
+
+Лимиты (валидируются и на клиенте, и в edge): ≤5 глав, ≤100 страниц на главу,
+≤20 MB изображение, ≤200 MB PDF, ≤500 MB суммарно.
+
+### 10.4 Проверка и troubleshooting
+
+Локально без Supabase: `npm run test:submit-chapters` (ядро подачи и
+финализации) и `npm run test:chapters-import` (CSV, имена файлов, план импорта).
+
+| Симптом | Причина / что делать |
+| --- | --- |
+| 429 при подаче главы | Исчерпано окно 3/мин · 30/час · 100/сутки. Счётчик отдельный от заявок на тайтл (суффикс `:chapters`), ждать окно. |
+| 400 `consent_required` | Не отмечен чекбокс согласия; сервер не доверяет клиенту и требует поле `consent`. |
+| 400 `title_id` = «Тайтл не найден / не опубликован» | Заявка на главы принимается только к опубликованному тайтлу. |
+| 400 с ключами вида `ch-1-page-2.webp` | Файлы не совпали с payload: лишний файл, не хватает файла или другое расширение. |
+| Approve прошёл, глав нет | `finalized_error` в строке заявки; в карточке «Завершить импорт». Частая причина — функция не задеплоена (404 от `/functions/v1/finalize-chapter-submission`). |
+| 403 на финализации | Функцию может вызвать только `owner` (проверка `has_role(uid,'owner')`), как и approve заявки. |
+| Глава создана с другим номером | Номер был занят — сдвиг виден в `payload.finalized.renumbered` и в отчёте импорта. |
+
+Отклонённые и спам-заявки файлы в `submissions` **не** удаляются: cron
+`cleanup_rejected_submissions()` (миграция 13) через 90 дней помечает строку
+`payload.purged=true` и стирает персональные поля, а сами объекты бакета
+зачищаются вручную (Dashboard → Storage → `submissions/{token}/`) — как и для
+заявок на тайтл.
+
+### 10.5 Известные ограничения финализации (бэклог)
+
+Оба пункта — не блокеры, оба про редкие сценарии, но зафиксированы здесь, чтобы
+их не пришлось выводить заново.
+
+**A. Параллельный finalize одной заявки.** Два одновременных вызова (две
+вкладки, повторный клик после зависшего запроса) оба видят `finalized_at IS
+NULL` и идут создавать главы. Дубль с **тем же** номером невозможен:
+`chapters` имеет `UNIQUE (title_id, number)` (`00000000000000_init.sql:41`,
+контрольно повторяется в миграции 07), поэтому второй INSERT упадёт на
+`unique_violation` → 500 `finalize_failed`. Остаточный риск другой:
+`resolveChapterNumber` берёт «следующий свободный», поэтому если первый вызов
+успел вставить главу до того, как второй посчитал номер, второй создаст ту же
+главу под сдвинутым номером. Клиент глушит кнопку через `running`, но это
+защита per-tab. Лечение (отдельной итерацией): промежуточный статус
+`finalizing` с условным UPDATE (`… SET status='finalizing' WHERE id=$1 AND
+status='approved' AND finalized_at IS NULL` и продолжать только если затронута
+строка) либо `pg_advisory_xact_lock(hashtext(request_id))` в начале функции.
+
+**B. Сбой чекпоинта сразу после INSERT главы.** Если UPDATE payload не прошёл
+между созданием главы и записью `finalized_chapter_id`, отметки нет и повтор
+создаст главу заново (со сдвигом номера — см. A). Окно в одну операцию,
+принципиально не закрывается без транзакции: INSERT главы и UPDATE заявки —
+два отдельных вызова PostgREST, а `finalize` намеренно не обёрнут в
+`rpc`-транзакцию (внутри цикла download/upload в Storage, которые в
+транзакцию не помещаются). Последствие ограничено: лишняя глава-черновик
+(`published=false`), которую видно в списке глав и можно удалить руками.
+
+> **Не сделано сознательно:** разбивка PDF на стороне сервера. В Deno-рантайме
+> нет pdf.js-пайплайна проекта (canvas + WASM-декодеры), поэтому PDF режется на
+> страницы в браузере (`src/lib/pdfToPages.ts`, лимит 500 страниц), а edge
+> принимает уже готовые страницы и, опционально, оригинал `ch-{n}.pdf` для
+> модератора. Оригинал при финализации не переносится в `manga` — строка в
+> `pages` указывала бы ридеру на PDF; файл удаляется вместе с исходниками.
+
+
 ## Загрузка страниц глав
 
 В `/admin/titles/$id/chapters/$cid` доступны выбор нескольких файлов и drag-and-drop.
