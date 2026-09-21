@@ -8,7 +8,21 @@
  * Лимиты: 15/мин + 100/час + 300/сутки на sha256(ip + salt).
  * Обложка: ≤5 MB, jpeg/png/webp, соотношение 3:4 ±10%.
  * Персональные данные: сырой IP не хранится нигде — только хэш.
+ *
+ * К заявке можно приложить главы (≤5 глав, см. chapterSubmissionCore.ts):
+ * страницы ложатся в submissions/{token}/ch-{n}/page-{m}.{ext}, и approve
+ * такой заявки завершается вызовом finalize-chapter-submission.
  */
+
+import {
+  checkChapterFiles,
+  MAX_TOTAL_BYTES,
+  submissionPagePath,
+  submissionPdfPath,
+  validateChapters,
+  type ChapterFilePart,
+  type ValidatedChapter,
+} from './chapterSubmissionCore.ts';
 
 export const TITLE_TYPE_VALUES = ['manga', 'manhwa', 'manhua', 'oel'] as const;
 export type TitleTypeValue = (typeof TITLE_TYPE_VALUES)[number];
@@ -48,6 +62,10 @@ export interface SubmissionInput {
   payloadRaw: unknown; // распарсенный JSON поля payload
   email?: string;
   coverBytes?: Uint8Array;
+  /** Опциональные главы к заявке на тайтл (collapsed-секция «Главы»). */
+  chaptersRaw?: unknown;
+  /** Файлы глав: ch-{n}-page-{m}[.ext] и ch-{n}.pdf. */
+  chapterFiles?: ChapterFilePart[];
   ip: string;
   userAgent?: string;
 }
@@ -65,9 +83,18 @@ export interface SubmissionRow {
 
 export type SubmissionDeps = {
   verifyCaptcha: (token: string, ip: string) => Promise<{ ok: boolean; error?: string }>;
+  /** RATE_LIMIT_SALT — для sha256(ip + salt) в ip_hash. */
+  ipSalt: string;
   /** Атомарный инкремент окна; false — лимит превышен. */
   checkLimit: (windowSeconds: number, limit: number) => Promise<boolean>;
   uploadCover: (bytes: Uint8Array, token: string, ext: string) => Promise<string>;
+  /** Страницы/PDF приложенных глав в бакет submissions (нужен только с главами). */
+  uploadPage?: (
+    bytes: Uint8Array,
+    token: string,
+    path: string,
+    contentType: string | undefined
+  ) => Promise<void>;
   insertRequest: (row: SubmissionRow) => Promise<{ id: string }>;
   /** Подмена в тестах; по умолчанию crypto.getRandomValues. */
   randomToken?: () => string;
@@ -381,6 +408,43 @@ export async function processSubmission(
     return { status: 400, body: { ok: false, error: 'validation_failed', fields: { cover: cover.error } } };
   }
 
+  // 4b. Главы (необязательно): валидация ДО любых upload'ов, чтобы отклонённая
+  //     заявка не оставляла в submissions сиротскую обложку.
+  let chapters: ValidatedChapter[] | null = null;
+  let chapterFiles: ReturnType<typeof checkChapterFiles> | null = null;
+  const hasChapters = input.chaptersRaw !== undefined && input.chaptersRaw !== null;
+  if (hasChapters) {
+    const checkedChapters = validateChapters(input.chaptersRaw);
+    if (!checkedChapters.ok) {
+      return { status: 400, body: { ok: false, error: 'validation_failed', fields: checkedChapters.fieldErrors } };
+    }
+    chapters = checkedChapters.chapters;
+    const files = checkChapterFiles(input.chapterFiles ?? [], chapters);
+    if (!files.ok) {
+      return { status: 400, body: { ok: false, error: 'validation_failed', fields: files.fieldErrors } };
+    }
+    chapterFiles = files;
+    // Считаем ФАКТИЧЕСКИЙ объём присланных частей, а не заявленный: 5 глав ×
+    // 100 страниц × 20 MB укладывается в лимиты отдельных файлов, но не в
+    // суммарные 500 MB. Проверка до любых upload'ов.
+    const actualTotal = files.actualBytes + (input.coverBytes?.length ?? 0);
+    if (actualTotal > MAX_TOTAL_BYTES) {
+      return {
+        status: 400,
+        body: {
+          ok: false,
+          error: 'validation_failed',
+          fields: {
+            total: `Суммарный размер больше ${MAX_TOTAL_BYTES / 1024 / 1024} MB`,
+          },
+        },
+      };
+    }
+    if (!deps.uploadPage) {
+      return { status: 500, body: { ok: false, error: 'page_upload_unavailable' } };
+    }
+  }
+
   // 5-6. Upload + INSERT
   const email = asTrimmedString(input.email);
   let coverUrl: string;
@@ -393,12 +457,58 @@ export async function processSubmission(
     };
   }
 
+  // Пути страниц в submissions/{token}/… — те же, что в заявке на главы,
+  // поэтому approve обрабатывает оба типа одной finalize-функцией.
+  let chaptersPayload: Record<string, unknown>[] | undefined;
+  if (chapters && chapterFiles && chapterFiles.ok) {
+    try {
+      for (const page of chapterFiles.pages) {
+        await deps.uploadPage!(
+          page.file.bytes,
+          token,
+          submissionPagePath(token, page.chapter, page.index, page.ext),
+          page.file.contentType
+        );
+      }
+      for (const pdf of chapterFiles.pdfs) {
+        await deps.uploadPage!(
+          pdf.file.bytes,
+          token,
+          submissionPdfPath(token, pdf.chapter),
+          pdf.file.contentType ?? 'application/pdf'
+        );
+      }
+    } catch (e) {
+      return {
+        status: 500,
+        body: { ok: false, error: 'page_upload_failed', detail: e instanceof Error ? e.message : String(e) },
+      };
+    }
+    chaptersPayload = chapters.map((ch) => ({
+      number: ch.number,
+      name: ch.name,
+      description: ch.description,
+      pages: ch.pages.map((p) => ({
+        index: p.index,
+        path: submissionPagePath(token, ch.number, p.index, p.ext),
+        size: p.size,
+      })),
+      pdf: ch.pdf ? submissionPdfPath(token, ch.number) : null,
+    }));
+  }
+
   let inserted: { id: string };
   try {
     inserted = await deps.insertRequest({
       type: 'new_title',
       status: 'pending',
-      payload: { ...payload, cover_url: coverUrl, cover_width: cover.width, cover_height: cover.height },
+      payload: {
+        ...payload,
+        cover_url: coverUrl,
+        cover_width: cover.width,
+        cover_height: cover.height,
+        ...(chaptersPayload && { chapters: chaptersPayload }),
+      },
       ip_hash: await hashIp(input.ip, deps.ipSalt),
       user_agent: input.userAgent ?? null,
       turnstile_ok: true,

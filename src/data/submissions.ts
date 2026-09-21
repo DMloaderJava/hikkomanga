@@ -1,6 +1,8 @@
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from '@/integrations/supabase/config';
 import { isSupabaseConfigured } from './client';
 import type { AdminRequest, RequestStatus } from './types';
+// type-only: рантайм-цикла submissions ↔ chapterSubmissions нет.
+import type { PreparedChapter } from './chapterSubmissions';
 
 /**
  * Анонимные заявки на тайтл.
@@ -97,13 +99,38 @@ export const submissions = {
     cover: File;
     captchaToken: string;
     email?: string;
+    /** Необязательные главы к заявке (collapsed-секция «Главы»). */
+    chapters?: PreparedChapter[];
   }): Promise<SubmitTitleResult> {
+    const chapters = input.chapters ?? [];
+
     if (isSupabaseConfigured) {
       const form = new FormData();
       form.append('turnstileToken', input.captchaToken);
       form.append('payload', JSON.stringify(input.payload));
       if (input.email?.trim()) form.append('email', input.email.trim());
       form.append('cover', input.cover);
+      // Главы — отдельное поле + файловые части ch-{n}-page-{m}.{ext};
+      // edge submit-title кладёт их в submissions/{token}/… как и submit-chapters.
+      if (chapters.length > 0) {
+        form.append(
+          'chapters',
+          JSON.stringify(
+            chapters.map((ch) => ({
+              number: ch.number,
+              name: ch.name,
+              description: ch.description,
+              pages: ch.pages.map((pg) => ({ name: pg.name, size: pg.size })),
+              // { name, size } — сервер по размеру считает суммарный объём
+              pdf: ch.pdf ? { name: ch.pdf.name, size: ch.pdf.size } : null,
+            }))
+          )
+        );
+        for (const ch of chapters) {
+          for (const pg of ch.pages) form.append(pg.name, pg.file);
+          if (ch.pdf) form.append(ch.pdf.name, ch.pdf.file);
+        }
+      }
 
       try {
         const res = await fetch(`${SUPABASE_URL}/functions/v1/submit-title`, {
@@ -158,6 +185,17 @@ export const submissions = {
         ...input.payload,
         cover_url: coverUrl,
         cover_name: input.cover.name,
+        // Демо: страницы глав не сохраняем (localStorage), только их состав —
+        // approve в демо создаёт главы без файлов.
+        ...(chapters.length > 0 && {
+          chapters: chapters.map((ch) => ({
+            number: ch.number,
+            name: ch.name,
+            description: ch.description,
+            pages: ch.pages.map((pg, i) => ({ index: i + 1, path: pg.name, size: pg.size })),
+            pdf: ch.pdf ? { name: ch.pdf.name, size: ch.pdf.size } : null,
+          })),
+        }),
       },
       status: 'pending',
       ip_hash: 'demo-anonymous',

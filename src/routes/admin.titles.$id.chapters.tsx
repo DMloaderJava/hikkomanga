@@ -15,6 +15,7 @@ import {
   BookOpen,
   FileImage,
   AlertCircle,
+  FileUp,
 } from 'lucide-react';
 import type { Title, Chapter, ChapterInput } from '@/data/types';
 import { formatChapterNumber, formatDate } from '@/lib/format';
@@ -109,17 +110,27 @@ function AdminTitleChaptersPage() {
           </div>
         </div>
 
-        <Button
-          onClick={() => {
-            setError(null);
-            setShowAddForm(!showAddForm);
-          }}
-          variant={showAddForm ? 'secondary' : 'default'}
-          className="gap-2 shrink-0"
-        >
-          <Plus className="h-4 w-4" />
-          {showAddForm ? 'Скрыть форму' : 'Добавить главу'}
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          {isOwner && (
+            <Link to="/admin/titles/$id/chapters/import" params={{ id: title.id }}>
+              <Button variant="outline" className="gap-2 border-neutral-700">
+                <FileUp className="h-4 w-4" />
+                Импорт глав
+              </Button>
+            </Link>
+          )}
+          <Button
+            onClick={() => {
+              setError(null);
+              setShowAddForm(!showAddForm);
+            }}
+            variant={showAddForm ? 'secondary' : 'default'}
+            className="gap-2"
+          >
+            <Plus className="h-4 w-4" />
+            {showAddForm ? 'Скрыть форму' : 'Добавить главу'}
+          </Button>
+        </div>
       </div>
 
       {error && (

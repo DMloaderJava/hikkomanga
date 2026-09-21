@@ -342,6 +342,7 @@ class LocalStore {
       title_id: input.title_id,
       number: Number(input.number),
       name: input.name || null,
+      description: input.description ?? null,
       published: input.published ?? false,
       created_at: new Date().toISOString(),
     };

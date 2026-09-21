@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { useState, useEffect, useCallback } from 'react';
 import { adminRequests } from '@/data/adminRequests';
+import { chapterSubmissions, submissionObjectUrl } from '@/data/chapterSubmissions';
 import { auth } from '@/data/auth';
 import type { AdminRequest } from '@/data/types';
 import { Button } from '@/components/ui/button';
@@ -20,6 +21,8 @@ import {
   ShieldAlert,
   Ban,
   Loader2,
+  Layers,
+  RefreshCw,
 } from 'lucide-react';
 import { formatDate } from '@/lib/format';
 
@@ -33,12 +36,14 @@ const TYPE_LABELS: Record<string, string> = {
   new_chapter: 'Новая глава',
   ad_request: 'Реклама',
   new_title: 'Новый тайтл',
+  new_chapters: 'Новые главы',
 };
 
 /** Фильтры типа: только реально приходящие в инбокс типы. */
 const TYPE_FILTERS: Array<{ value: string; label: string }> = [
   { value: 'all', label: 'Все типы' },
   { value: 'new_title', label: 'Новые тайтлы' },
+  { value: 'new_chapters', label: 'Заявки на главы' },
   { value: 'new_chapter', label: 'Главы' },
   { value: 'delete_title', label: 'Удаление тайтлов' },
   { value: 'delete_chapter', label: 'Удаление глав' },
@@ -55,6 +60,9 @@ function TypeIcon({ type }: { type: string }) {
   if (type === 'new_title') {
     return <BookPlus className="h-4 w-4 text-emerald-400" />;
   }
+  if (type === 'new_chapters') {
+    return <Layers className="h-4 w-4 text-emerald-400" />;
+  }
   return <Megaphone className="h-4 w-4 text-blue-400" />;
 }
 
@@ -62,11 +70,42 @@ function isDestructive(type: string) {
   return type === 'delete_title' || type === 'delete_chapter';
 }
 
+/** Главы в заявке: new_chapters целиком или new_title с приложенными главами. */
+function requestChapters(req: AdminRequest): Array<Record<string, unknown>> {
+  const raw = (req.payload as Record<string, unknown> | undefined)?.chapters;
+  return Array.isArray(raw) ? (raw as Array<Record<string, unknown>>) : [];
+}
+
+function hasChapters(req: AdminRequest): boolean {
+  return (
+    (req.type === 'new_chapters' || req.type === 'new_title') &&
+    requestChapters(req).length > 0
+  );
+}
+
+function chapterPages(chapter: Record<string, unknown>): Array<Record<string, unknown>> {
+  return Array.isArray(chapter.pages) ? (chapter.pages as Array<Record<string, unknown>>) : [];
+}
+
+/** PDF главы объявлен строкой (старый payload) или { name, size }. */
+function pdfLabel(pdf: unknown): string {
+  if (typeof pdf === 'string') return pdf;
+  if (pdf && typeof pdf === 'object') {
+    const name = (pdf as { name?: unknown }).name;
+    if (typeof name === 'string') return name;
+  }
+  return '';
+}
+
 /** Заголовок заявки для flash/диалогов. */
 function requestTitle(req: AdminRequest): string {
   if (req.type === 'new_title') {
     const t = req.payload?.original_title;
     return typeof t === 'string' && t ? t : req.target_name || '—';
+  }
+  if (req.type === 'new_chapters') {
+    const t = req.payload?.title_name;
+    return req.target_name || (typeof t === 'string' && t ? t : '—');
   }
   return req.target_name || '—';
 }
@@ -93,6 +132,10 @@ function AdminRequestsPage() {
   /** Фильтры инбокса (owner): статус и тип. */
   const [statusFilter, setStatusFilter] = useState<'pending' | 'resolved'>('pending');
   const [typeFilter, setTypeFilter] = useState('all');
+  /** Состояние переноса файлов глав (finalize-chapter-submission). */
+  const [finalizeState, setFinalizeState] = useState<
+    Record<string, { status: 'running' | 'error' | 'done'; message?: string }>
+  >({});
 
   const loadRequests = useCallback(
     async (opts: { isOwner: boolean; status: 'pending' | 'resolved'; type: string }) => {
@@ -162,7 +205,44 @@ function AdminRequestsPage() {
       setConfirmError(null);
       try {
         const result = await adminRequests.resolve(req.id, decision, opts?.reason);
-        setRequests((prev) => prev.filter((r) => r.id !== req.id));
+
+        // Заявка с главами: approve только меняет статус, сами главы и страницы
+        // переносит edge finalize-chapter-submission (service_role).
+        const needsFinalize = decision === 'approved' && hasChapters(req);
+        let finalizeOk = true;
+        let finalizeMessage = '';
+        if (needsFinalize) {
+          const fin = await chapterSubmissions.finalize(req.id);
+          finalizeOk = fin.ok;
+          if (!fin.ok) {
+            finalizeMessage = fin.message ?? fin.error ?? 'Импорт глав не завершился';
+            setFinalizeState((prev) => ({
+              ...prev,
+              [req.id]: { status: 'error', message: finalizeMessage },
+            }));
+          } else {
+            setFinalizeState((prev) => ({ ...prev, [req.id]: { status: 'done' } }));
+          }
+        }
+        // Карточка остаётся в списке, если импорт не завершился: нужен повтор.
+        // Статус синхронизируем с БД, иначе карточка показывала бы «Одобрить»
+        // вместо кнопки «Завершить импорт».
+        if (!needsFinalize || finalizeOk) {
+          setRequests((prev) => prev.filter((r) => r.id !== req.id));
+        } else {
+          setRequests((prev) =>
+            prev.map((r) =>
+              r.id === req.id
+                ? {
+                    ...r,
+                    status: 'approved' as const,
+                    resolved_at: new Date().toISOString(),
+                    finalized_error: finalizeMessage,
+                  }
+                : r
+            )
+          );
+        }
         setConfirm(null);
         setRejectTarget(null);
 
@@ -189,6 +269,14 @@ function AdminRequestsPage() {
               }${n != null || name ? ')' : ''}. ` +
                 `Номер мог сдвинуться, если был занят — см. список глав тайтла.`
             );
+          } else if (req.type === 'new_chapters') {
+            setFlash(
+              finalizeOk
+                ? `Главы импортированы черновиками (published=false) в «${requestTitle(req)}». ` +
+                    `Опубликуйте их из раздела «Тайтлы».`
+                : `Заявка одобрена, но импорт глав не завершился: ${finalizeMessage}. ` +
+                    `Нажмите «Завершить импорт» в карточке.`
+            );
           } else if (req.type === 'new_title') {
             if (result?.conflict) {
               const slug = typeof req.payload?.original_title === 'string'
@@ -197,6 +285,13 @@ function AdminRequestsPage() {
               setFlash(
                 `⚠ Заявка одобрена, но черновик НЕ создан: тайтл «${slug}» уже есть в каталоге ` +
                   `(slug занят). Проверьте каталог и при необходимости дополните существующий тайтл.`
+              );
+            } else if (hasChapters(req)) {
+              setFlash(
+                finalizeOk
+                  ? 'Черновик тайтла создан, приложенные главы импортированы черновиками.'
+                  : `Черновик тайтла создан, но импорт глав не завершился: ${finalizeMessage}. ` +
+                      'Нажмите «Завершить импорт» в карточке.'
               );
             } else {
               setFlash(
@@ -230,6 +325,38 @@ function AdminRequestsPage() {
       }
     },
     []
+  );
+
+  /**
+   * Повтор переноса файлов (кнопка «Завершить импорт»). Edge-функция
+   * идемпотентна: уже созданные главы пропускаются по payload.finalized_chapter_id.
+   */
+  const retryFinalize = useCallback(
+    async (req: AdminRequest) => {
+      setFinalizeState((prev) => ({ ...prev, [req.id]: { status: 'running' } }));
+      setError(null);
+      setFlash(null);
+      const fin = await chapterSubmissions.finalize(req.id);
+      if (fin.ok) {
+        setFinalizeState((prev) => ({ ...prev, [req.id]: { status: 'done' } }));
+        setFlash(
+          `Импорт завершён: глав ${fin.chapters_imported ?? 0}, страниц ${fin.pages_imported ?? 0}.`
+        );
+        if (sessionInfo) {
+          await loadRequests({
+            isOwner: sessionInfo.isOwner,
+            status: statusFilter,
+            type: typeFilter,
+          });
+        }
+        return;
+      }
+      setFinalizeState((prev) => ({
+        ...prev,
+        [req.id]: { status: 'error', message: fin.message ?? fin.error ?? 'Импорт не завершился' },
+      }));
+    },
+    [sessionInfo, loadRequests, statusFilter, typeFilter]
   );
 
   /** Клик: для delete_* — ConfirmDialog; иначе сразу resolve. */
@@ -402,6 +529,8 @@ function AdminRequestsPage() {
             onBulkIp={() => {
               setBulkTarget(req);
             }}
+            finalize={finalizeState[req.id]}
+            onFinalize={() => void retryFinalize(req)}
           />
         ))}
       </div>
@@ -546,6 +675,8 @@ function RequestCard({
   onReject,
   onSpam,
   onBulkIp,
+  finalize,
+  onFinalize,
 }: {
   req: AdminRequest;
   canResolve: boolean;
@@ -554,8 +685,11 @@ function RequestCard({
   onReject: () => void;
   onSpam: () => void;
   onBulkIp: () => void;
+  finalize?: { status: 'running' | 'error' | 'done'; message?: string };
+  onFinalize: () => void;
 }) {
   const isNewTitle = req.type === 'new_title';
+  const withChapters = hasChapters(req);
   const payload = req.payload as Record<string, unknown>;
 
   return (
@@ -612,6 +746,8 @@ function RequestCard({
       {isNewTitle && (
         <NewTitleDetails req={req} payload={payload} />
       )}
+
+      {withChapters && <ChapterSubmissionDetails req={req} />}
 
       {req.type === 'new_chapter' &&
         (req.payload?.suggested_number != null ||
@@ -687,6 +823,13 @@ function RequestCard({
               разделе «Реклама».
             </p>
           )}
+          {withChapters && (
+            <p className="text-[11px] text-neutral-500 leading-relaxed">
+              «Одобрить» создаст главы черновиками (published=false) и перенесёт
+              страницы из submissions в manga. При занятом номере глава получит
+              следующий свободный — это видно в отчёче карточки.
+            </p>
+          )}
           {isNewTitle && (
             <p className="text-[11px] text-neutral-500 leading-relaxed">
               «Одобрить» создаст черновик тайтла (published=false). Если slug
@@ -758,10 +901,44 @@ function RequestCard({
         </div>
       )}
       {canResolve && req.status !== 'pending' && (
-        <p className="text-xs text-neutral-500 pt-1">
-          Решено {req.resolved_at ? formatDate(req.resolved_at) : ''}
-          {req.reject_reason ? ` · причина: ${req.reject_reason}` : ''}.
-        </p>
+        <div className="space-y-2 pt-1">
+          <p className="text-xs text-neutral-500">
+            Решено {req.resolved_at ? formatDate(req.resolved_at) : ''}
+            {req.reject_reason ? ` · причина: ${req.reject_reason}` : ''}.
+          </p>
+          {/* Импорт глав: approved без finalized_at = перенос не завершился. */}
+          {withChapters && req.status === 'approved' && (
+            <div className="space-y-1.5">
+              {req.finalized_at ? (
+                <p className="text-[11px] text-green-500/90">
+                  Импорт глав завершён {formatDate(req.finalized_at)}.
+                </p>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={onFinalize}
+                    disabled={finalize?.status === 'running' || resolving}
+                    className="gap-1.5 border-neutral-700"
+                  >
+                    {finalize?.status === 'running' ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="h-3.5 w-3.5" />
+                    )}
+                    Завершить импорт
+                  </Button>
+                  <span className="text-[11px] text-amber-400">
+                    {finalize?.message ??
+                      req.finalized_error ??
+                      'Файлы заявки не перенесены в manga — нажмите, чтобы повторить.'}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       )}
       {!canResolve && req.status === 'pending' && (
         <p className="text-xs text-neutral-500 pt-1">
@@ -880,6 +1057,91 @@ function NewTitleDetails({
           <p className="break-all text-[10px] text-neutral-600">{req.user_agent}</p>
         )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Превью заявки с главами (new_chapters и new_title+главы): тайтл, главы с
+ * превью первой страницы, счётчики страниц и объёма, аудит-метаданные.
+ * payload заявки доступен только owner/admin (RLS); публичный токен его не отдаёт.
+ */
+function ChapterSubmissionDetails({ req }: { req: AdminRequest }) {
+  const chapters = requestChapters(req);
+  const totalPages = chapters.reduce((sum, ch) => sum + chapterPages(ch).length, 0);
+  const totalSize = chapters.reduce(
+    (sum, ch) =>
+      sum +
+      chapterPages(ch).reduce((s, p) => s + (Number(p.size) || 0), 0),
+    0
+  );
+
+  return (
+    <div className="space-y-2 rounded-lg border border-neutral-800 bg-neutral-950/40 p-3">
+      <p className="text-xs text-neutral-400">
+        <span className="text-neutral-500">Тайтл:</span>{' '}
+        <span className="text-neutral-200">{requestTitle(req)}</span>
+        <span className="text-neutral-500"> · глав:</span> {chapters.length}
+        <span className="text-neutral-500"> · страниц:</span> {totalPages}
+        <span className="text-neutral-500"> · объём:</span>{' '}
+        {(totalSize / 1024 / 1024).toFixed(1)} MB
+      </p>
+      <ul className="space-y-2">
+        {chapters.map((ch, i) => {
+          const pages = chapterPages(ch);
+          const preview = submissionObjectUrl(pages[0]?.path);
+          const created = typeof ch.finalized_chapter_id === 'string' ? ch.finalized_chapter_id : null;
+          return (
+            <li key={i} className="flex items-start gap-3">
+              <div className="flex h-16 w-12 shrink-0 items-center justify-center overflow-hidden rounded border border-neutral-800 bg-neutral-900">
+                {preview ? (
+                  <img
+                    src={preview}
+                    alt={`Глава ${String(ch.number ?? i + 1)}, страница 1`}
+                    className="h-full w-full object-cover"
+                    onError={(e) => {
+                      e.currentTarget.style.visibility = 'hidden';
+                    }}
+                  />
+                ) : (
+                  <Layers className="h-5 w-5 text-neutral-700" />
+                )}
+              </div>
+              <div className="min-w-0 text-xs">
+                <p className="text-neutral-200">
+                  Глава {String(ch.number ?? i + 1)}
+                  {typeof ch.name === 'string' && ch.name ? ` · ${ch.name}` : ''}
+                  <span className="text-neutral-500"> — {pages.length} стр.</span>
+                  {created && (
+                    <span className="ml-1 text-green-500/90">
+                      (создана № {String(ch.finalized_number ?? ch.number ?? '—')})
+                    </span>
+                  )}
+                </p>
+                {typeof ch.description === 'string' && ch.description && (
+                  <p className="line-clamp-2 text-neutral-500">{ch.description}</p>
+                )}
+                {pdfLabel(ch.pdf) && (
+                  <p className="text-neutral-600">оригинал: {pdfLabel(ch.pdf)}</p>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+      <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-neutral-500">
+        {req.turnstile_ok ? (
+          <span className="text-green-500/80">✓ капча пройдена</span>
+        ) : (
+          <span className="text-amber-500/80">капча: нет отметки</span>
+        )}
+        {req.ip_hash && (
+          <span className="font-mono" title={req.user_agent ?? undefined}>
+            ip: {req.ip_hash.slice(0, 12)}…
+          </span>
+        )}
+        {req.submitter_email && <span>email: {req.submitter_email}</span>}
+      </p>
     </div>
   );
 }

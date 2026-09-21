@@ -23,6 +23,8 @@ export interface Chapter {
   title_id: string;
   number: number;
   name: string | null;
+  /** Необязательное описание главы (миграция 15): заявки на главы и CSV-импорт. */
+  description?: string | null;
   published: boolean;
   created_at: string;
 }
@@ -50,6 +52,7 @@ export interface ChapterInput {
   title_id: string;
   number: number;
   name?: string | null;
+  description?: string | null;
   published?: boolean;
 }
 
@@ -99,7 +102,9 @@ export type RequestType =
   | 'ad_request'
   // Анонимная заявка на тайтл (edge submit-title); остальные типы модели БД —
   // итерациями (см. миграцию 00000000000010).
-  | 'new_title';
+  | 'new_title'
+  // Анонимная заявка на главы (edge submit-chapters, миграция 15).
+  | 'new_chapters';
 
 export type RequestStatus = 'pending' | 'approved' | 'rejected' | 'spam';
 
@@ -128,6 +133,11 @@ export interface AdminRequest {
   submitter_email?: string | null;
   /** true = slug занят при approve; черновик не создан. */
   conflict?: boolean;
+  // ── Заявки с главами (new_chapters, new_title + главы) ──
+  /** Импорт глав завершён (edge finalize-chapter-submission). */
+  finalized_at?: string | null;
+  /** Текст последней ошибки импорта; в инбоксе даёт кнопку «Завершить импорт». */
+  finalized_error?: string | null;
 }
 
 // ── Реклама ─────────────────────────────────────────────────────────────────

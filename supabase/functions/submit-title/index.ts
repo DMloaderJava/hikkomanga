@@ -5,6 +5,9 @@
 //   payload        — JSON-строка { original_title, type, description, genres[], ... }
 //   email?         — опционально: уведомления о решении (Resend, без верификации в v1)
 //   cover          — файл ≤5 MB, jpeg/png/webp, 3:4 ±10%
+//   chapters?      — JSON-массив глав (≤5): заявка на тайтл сразу с главами.
+//                    Файлы страниц едут частями ch-{n}-page-{m}[.ext] (+ ch-{n}.pdf);
+//                    approve такой заявки завершается finalize-chapter-submission.
 //
 // Порядок проверки: rate limit (15/мин, 100/час, 300/сутки по
 // sha256(ip+salt)) → капча → payload → обложка → upload в бакет submissions
@@ -23,6 +26,7 @@ import {
   pickClientIp,
   type SubmissionDeps,
 } from '../_shared/submissionCore.ts';
+import { type ChapterFilePart } from '../_shared/chapterSubmissionCore.ts';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -74,11 +78,38 @@ Deno.serve(async (req) => {
       return null;
     }
   })();
+  // Главы — отдельное поле `chapters` (JSON-массив) или payload.chapters.
+  const chaptersRaw = (() => {
+    const raw = form.get('chapters');
+    if (typeof raw === 'string' && raw.trim()) {
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return null;
+      }
+    }
+    const inline = (payloadRaw as { chapters?: unknown } | null)?.chapters;
+    return Array.isArray(inline) && inline.length > 0 ? inline : undefined;
+  })();
   const cover = form.get('cover');
   const coverBytes =
     cover && typeof cover === 'object' && 'arrayBuffer' in (cover as File)
       ? new Uint8Array(await (cover as File).arrayBuffer())
       : undefined;
+
+  // Остальные файловые части — страницы/PDF приложенных глав
+  // (ch-{n}-page-{m}[.ext], ch-{n}.pdf); имена сверяет checkChapterFiles.
+  const chapterFiles: ChapterFilePart[] = [];
+  for (const [name, value] of form.entries()) {
+    if (name === 'cover' || typeof value === 'string') continue;
+    if (!value || typeof value !== 'object' || !('arrayBuffer' in value)) continue;
+    const file = value as File;
+    chapterFiles.push({
+      name,
+      bytes: new Uint8Array(await file.arrayBuffer()),
+      contentType: file.type || undefined,
+    });
+  }
 
   // cf-connecting-ip — приоритет (ставит CF, не подделывается); XFF —
   // fallback ПОСЛЕДНИМ элементом (первый контролирует клиент → спуфинг).
@@ -114,6 +145,14 @@ Deno.serve(async (req) => {
       // Полный публичный URL: триггер копирует его в titles.cover_url как есть.
       return `${supabaseUrl}/storage/v1/object/public/submissions/${path}`;
     },
+    // Страницы приложенных глав — в тот же бакет, путь ch-{n}/page-{m}.{ext}
+    // (тот же, что в submit-chapters: approve обрабатывает оба типа заявок).
+    uploadPage: async (bytes, token, path, contentType) => {
+      const { error } = await admin.storage
+        .from('submissions')
+        .upload(path, bytes, { contentType, upsert: true });
+      if (error) throw new Error(error.message);
+    },
     insertRequest: async (row) => {
       const { data, error } = await admin
         .from('admin_requests')
@@ -131,6 +170,8 @@ Deno.serve(async (req) => {
       payloadRaw,
       email,
       coverBytes,
+      chaptersRaw,
+      chapterFiles,
       ip,
       userAgent: req.headers.get('user-agent') ?? undefined,
     });

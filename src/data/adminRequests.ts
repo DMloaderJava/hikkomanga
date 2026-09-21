@@ -151,9 +151,13 @@ export const adminRequests = {
       // new_title: конфликт slug НЕ срывает approve — заявка одобряется с
       // payload.conflict=true (как on conflict do nothing в триггере).
       let conflictPayload: Record<string, unknown> | null = null;
+      // Патч payload из демо-применения (как NEW.payload := … в SQL-триггере):
+      // для new_title это created_title_id, по которому finalize-chapter-submission
+      // находит тайтл при импорте приложенных глав.
+      let appliedPayload: Record<string, unknown> | null = null;
       if (decision === 'approved' && prev.status === 'pending') {
         try {
-          await applyDemoRequest(prev);
+          appliedPayload = await applyDemoRequest(prev);
         } catch (e) {
           if (e instanceof SlugConflictError && prev.type === 'new_title') {
             conflictPayload = { conflict: true };
@@ -178,7 +182,10 @@ export const adminRequests = {
         resolved_at: new Date().toISOString(),
         resolved_by: demoResolver,
         reject_reason: rejectReason,
-        payload: conflictPayload ? { ...prev.payload, ...conflictPayload } : prev.payload,
+        payload:
+          conflictPayload || appliedPayload
+            ? { ...prev.payload, ...(appliedPayload ?? {}), ...(conflictPayload ?? {}) }
+            : prev.payload,
         conflict: conflictPayload ? true : false,
       };
       saveDemo(list);
@@ -333,8 +340,13 @@ export const adminRequests = {
   },
 };
 
-/** Локальное применение approved-заявки без Supabase. */
-async function applyDemoRequest(req: AdminRequest): Promise<void> {
+/**
+ * Локальное применение approved-заявки без Supabase.
+ * Возвращает патч payload (аналог NEW.payload в триггере apply_admin_request).
+ */
+async function applyDemoRequest(
+  req: AdminRequest
+): Promise<Record<string, unknown> | null> {
   // Динамический импорт, чтобы не плодить циклы titles ↔ adminRequests.
   if (req.type === 'delete_title' && req.target_id) {
     const { titles } = await import('./titles');
@@ -344,7 +356,7 @@ async function applyDemoRequest(req: AdminRequest): Promise<void> {
       console.warn('[demo] delete_title apply:', e);
       throw e;
     }
-    return;
+    return null;
   }
   if (req.type === 'delete_chapter' && req.target_id) {
     const { chapters } = await import('./chapters');
@@ -354,7 +366,7 @@ async function applyDemoRequest(req: AdminRequest): Promise<void> {
       console.warn('[demo] delete_chapter apply:', e);
       throw e;
     }
-    return;
+    return null;
   }
   if (req.type === 'new_chapter' && req.target_id) {
     const { chapters } = await import('./chapters');
@@ -391,6 +403,7 @@ async function applyDemoRequest(req: AdminRequest): Promise<void> {
         throw e;
       }
     }
+    return null;
   }
   if (req.type === 'new_title') {
     // Анонимная заявка на тайтл → черновик (published=false), как триггер 14.
@@ -403,7 +416,7 @@ async function applyDemoRequest(req: AdminRequest): Promise<void> {
 
     const status =
       p.status === 'completed' || p.status === 'ongoing' ? p.status : 'ongoing';
-    await titles.create({
+    const created = await titles.create({
       slug: slugify(original),
       title: original,
       author: typeof p.author === 'string' && p.author ? p.author : null,
@@ -413,7 +426,13 @@ async function applyDemoRequest(req: AdminRequest): Promise<void> {
       published: false,
       genre_ids: [],
     });
-    return;
+    // Как триггер 14: payload.created_title_id нужен финализации глав.
+    return {
+      conflict: false,
+      created_title_id: created.id,
+      created_slug: created.slug,
+    };
   }
   // ad_request — без авто-применения
+  return null;
 }
