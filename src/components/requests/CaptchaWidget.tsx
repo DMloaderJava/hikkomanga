@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 
 /**
- * Обёртка капчи: Turnstile (по умолчанию) или hCaptcha — выбор через
+ * Обёртка капчи: Turnstile (по умолчанию), hCaptcha или reCAPTCHA v2 — выбор через
  * VITE_CAPTCHA_PROVIDER, замена провайдера не требует правок кода
  * (см. SETUP_SUPABASE.md, «Приём заявок»).
  *
@@ -10,48 +10,68 @@ import { useEffect, useRef, useState } from 'react';
  */
 const PROVIDER = (import.meta.env.VITE_CAPTCHA_PROVIDER as string | undefined) ?? 'turnstile';
 const SITE_KEY =
-  PROVIDER === 'hcaptcha'
-    ? (import.meta.env.VITE_HCAPTCHA_SITE_KEY as string | undefined) ?? ''
-    : (import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined) ?? '';
+  PROVIDER === 'recaptcha'
+    ? (import.meta.env.VITE_RECAPTCHA_SITE_KEY as string | undefined) ?? ''
+    : PROVIDER === 'hcaptcha'
+      ? (import.meta.env.VITE_HCAPTCHA_SITE_KEY as string | undefined) ?? ''
+      : (import.meta.env.VITE_TURNSTILE_SITE_KEY as string | undefined) ?? '';
 
 const SCRIPT_SRC =
-  PROVIDER === 'hcaptcha'
-    ? 'https://js.hcaptcha.com/1/api.js'
-    : 'https://challenges.cloudflare.com/turnstile/v0/api.js';
+  PROVIDER === 'recaptcha'
+    ? 'https://www.google.com/recaptcha/api.js?render=explicit&onload=hikkomangaCaptchaReady'
+    : PROVIDER === 'hcaptcha'
+      ? 'https://js.hcaptcha.com/1/api.js'
+      : 'https://challenges.cloudflare.com/turnstile/v0/api.js';
 
 // ── Минимальные типы провайдеров ─────────────────────────────────────────────
-interface TurnstileApi {
+interface CaptchaApi {
   render: (
     el: HTMLElement,
     opts: {
       sitekey: string;
       callback: (token: string) => void;
       'expired-callback': () => void;
-      'error-callback'?: () => void;
-      theme?: 'dark' | 'light' | 'auto';
+      'error-callback': () => void;
+      theme: 'dark';
     }
-  ) => string;
-  reset: (widgetId?: string) => void;
-  remove: (widgetId: string) => void;
-}
-interface HCaptchaApi {
-  render: (
-    el: HTMLElement,
-    opts: {
-      sitekey: string;
-      callback: (token: string) => void;
-      'expired-callback': () => void;
-      theme?: 'dark' | 'light';
-    }
-  ) => string;
-  reset: (widgetId?: string) => void;
-  remove: (widgetId: string) => void;
+  ) => string | number;
+  reset: (widgetId: string | number) => void;
+  // Google reCAPTCHA has no remove API.
+  remove?: (widgetId: string | number) => void;
 }
 
-function getApi(): TurnstileApi | HCaptchaApi | null {
+function getApi(): CaptchaApi | null {
   const w = window as unknown as Record<string, unknown>;
-  if (PROVIDER === 'hcaptcha') return (w.hcaptcha as HCaptchaApi) ?? null;
-  return (w.turnstile as TurnstileApi) ?? null;
+  const name = PROVIDER === 'recaptcha' ? 'grecaptcha' : PROVIDER === 'hcaptcha' ? 'hcaptcha' : 'turnstile';
+  const api = w[name] as CaptchaApi | undefined;
+  return typeof api?.render === 'function' ? api : null;
+}
+
+let scriptPromise: Promise<void> | undefined;
+function loadScript(): Promise<void> {
+  if (getApi()) return Promise.resolve();
+  if (scriptPromise) return scriptPromise;
+  scriptPromise = new Promise<void>((resolve, reject) => {
+    // Google's outer script can load before grecaptcha.render is ready.
+    // Its explicit onload callback runs after the full API is available.
+    if (PROVIDER === 'recaptcha') {
+      (window as unknown as Record<string, unknown>).hikkomangaCaptchaReady = () => resolve();
+    }
+    const script = document.createElement('script');
+    script.src = SCRIPT_SRC;
+    script.async = true;
+    script.defer = true;
+    script.addEventListener('load', () => {
+      if (PROVIDER !== 'recaptcha') resolve();
+    }, { once: true });
+    script.addEventListener('error', () => {
+      script.remove();
+      scriptPromise = undefined;
+      reject(new Error('Captcha script failed to load'));
+    }, { once: true });
+    document.head.appendChild(script);
+  });
+  return scriptPromise;
 }
 
 interface CaptchaWidgetProps {
@@ -63,8 +83,10 @@ interface CaptchaWidgetProps {
 
 export function CaptchaWidget({ onVerify, onExpire }: CaptchaWidgetProps) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const widgetIdRef = useRef<string | null>(null);
+  const widgetIdRef = useRef<string | number | null>(null);
   const [failed, setFailed] = useState(false);
+  const callbacks = useRef({ onVerify, onExpire });
+  callbacks.current = { onVerify, onExpire };
 
   useEffect(() => {
     if (!SITE_KEY) {
@@ -74,56 +96,58 @@ export function CaptchaWidget({ onVerify, onExpire }: CaptchaWidgetProps) {
     }
 
     let cancelled = false;
+    const container = containerRef.current;
+    // A fresh child also makes StrictMode remounts safe for Google's API,
+    // which cannot remove a widget registration from its original element.
+    const mount = document.createElement('div');
+    container?.appendChild(mount);
 
-    const render = () => {
-      if (cancelled || !containerRef.current) return;
+    loadScript().then(() => {
+      if (cancelled || !container) return;
       const api = getApi();
-      if (!api) return;
-      const opts = {
+      if (!api) throw new Error('Captcha API unavailable');
+      widgetIdRef.current = api.render(mount, {
         sitekey: SITE_KEY,
-        callback: (token: string) => onVerify(token),
-        'expired-callback': () => onExpire?.(),
-        theme: 'dark' as const,
-      };
-      widgetIdRef.current = api.render(containerRef.current, opts);
-    };
-
-    const existing = document.querySelector<HTMLScriptElement>(
-      `script[src="${SCRIPT_SRC}"]`
-    );
-    if (getApi()) {
-      render();
-    } else if (existing) {
-      existing.addEventListener('load', render, { once: true });
-    } else {
-      const script = document.createElement('script');
-      script.src = SCRIPT_SRC;
-      script.async = true;
-      script.defer = true;
-      script.addEventListener('load', render, { once: true });
-      script.addEventListener('error', () => setFailed(true), { once: true });
-      document.head.appendChild(script);
-    }
+        callback: (token: string) => {
+          if (cancelled) return;
+          setFailed(false);
+          callbacks.current.onVerify(token);
+        },
+        'expired-callback': () => {
+          if (!cancelled) callbacks.current.onExpire?.();
+        },
+        'error-callback': () => {
+          if (cancelled) return;
+          setFailed(true);
+          callbacks.current.onExpire?.();
+        },
+        theme: 'dark',
+      });
+    }).catch(() => {
+      if (!cancelled) setFailed(true);
+    });
 
     return () => {
       cancelled = true;
       const api = getApi();
-      if (api && widgetIdRef.current) {
+      // Google's first widget ID is 0 (not a missing widget).
+      if (api && widgetIdRef.current !== null) {
         try {
-          api.remove(widgetIdRef.current);
+          if (api.remove) api.remove(widgetIdRef.current);
+          else api.reset(widgetIdRef.current);
         } catch {
           // контейнер уже размонтирован
         }
       }
       widgetIdRef.current = null;
+      mount.remove();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (!SITE_KEY) {
     return (
       <div className="rounded-lg border border-amber-800/60 bg-amber-950/30 p-3 text-xs text-amber-300">
-        Капча не настроена (VITE_TURNSTILE_SITE_KEY / VITE_HCAPTCHA_SITE_KEY).
+        Капча не настроена (VITE_TURNSTILE_SITE_KEY / VITE_HCAPTCHA_SITE_KEY / VITE_RECAPTCHA_SITE_KEY).
         Отправка заявок недоступна — обратитесь к администратору сайта.
       </div>
     );
@@ -135,7 +159,7 @@ export function CaptchaWidget({ onVerify, onExpire }: CaptchaWidgetProps) {
       {failed && (
         <div className="rounded-lg border border-red-800/60 bg-red-950/30 p-3 text-xs text-red-400">
           Не удалось загрузить капчу. Проверьте сеть (CSP допускает{' '}
-          {PROVIDER === 'hcaptcha' ? 'js.hcaptcha.com' : 'challenges.cloudflare.com'}) и обновите страницу.
+          {PROVIDER === 'recaptcha' ? 'www.google.com / www.gstatic.com' : PROVIDER === 'hcaptcha' ? 'js.hcaptcha.com' : 'challenges.cloudflare.com'}) и обновите страницу.
         </div>
       )}
     </div>
