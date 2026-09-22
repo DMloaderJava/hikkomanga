@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createFileRoute, useNavigate } from '@tanstack/react-router';
 import { auth } from '@/data/auth';
-import { subscribeLoginChallenge, type LoginChallengeStatus } from '@/data/notify';
+import { resolveLoginChallenge, subscribeLoginChallenge, type LoginChallengeStatus } from '@/data/notify';
 import {
   loginChallengeUx,
   WAIT_HINT,
@@ -17,7 +17,6 @@ import {
   Mail,
   Loader2,
   CheckCircle2,
-  ExternalLink,
 } from 'lucide-react';
 import { updateMetaTags } from '@/lib/seo';
 import type { LoginNotifyResult } from '@/data/notify';
@@ -66,6 +65,7 @@ function AdminLoginPage() {
   const [phase, setPhase] = useState<Phase>('form');
   const [notify, setNotify] = useState<LoginNotifyResult | null>(null);
   const [pollHint, setPollHint] = useState(WAIT_HINT);
+  const [devAction, setDevAction] = useState<'approve' | 'deny' | null>(null);
 
   const navigate = useNavigate();
 
@@ -235,6 +235,35 @@ function AdminLoginPage() {
     }
   };
 
+  const handleDevConfirmation = async (action: 'approve' | 'deny') => {
+    // Only the emulated dev email exposes its token. Production still requires
+    // the owner's email link; this does not bypass auth.hasRole/Login Guard.
+    if (!import.meta.env.DEV || !notify?.emulated || devAction) return;
+    setDevAction(action);
+    setError(null);
+    try {
+      const url = action === 'approve' ? notify.preview?.approveUrl : notify.preview?.denyUrl;
+      const token = url ? new URL(url, window.location.origin).searchParams.get('token') : null;
+      if (!token) throw new Error('В dev-ссылке нет токена. Отмените вход и войдите заново.');
+      const result = await resolveLoginChallenge(token, action);
+      if (result.status === 'approved' || result.status === 'already_approved') {
+        await applyChallengeStatus('approved');
+      } else if (result.status === 'denied' || result.status === 'already_denied') {
+        await applyChallengeStatus('denied');
+      } else if (result.status === 'expired') {
+        await applyChallengeStatus('expired');
+      } else {
+        throw new Error(result.status === 'not_found'
+          ? 'Подтверждение не найдено. Возможно, dev-сервер был перезапущен. Отмените вход и войдите заново.'
+          : result.error || 'Не удалось обработать подтверждение. Попробуйте ещё раз.');
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Ошибка подтверждения входа');
+    } finally {
+      setDevAction(null);
+    }
+  };
+
   const handleCancelWait = async () => {
     await auth.signOut();
     setPhase('form');
@@ -311,31 +340,30 @@ function AdminLoginPage() {
               </div>
             </div>
 
-            {notify?.emulated && notify.preview?.approveUrl && (
+            {import.meta.env.DEV && notify?.emulated && notify.preview?.approveUrl && (
               <div className="rounded-xl border border-neutral-700 bg-neutral-950/60 p-4 space-y-3">
                 <p className="text-xs text-neutral-400">
                   Dev-режим без Resend: письмо эмулировано. Подтвердите вручную:
                 </p>
                 <div className="flex flex-col gap-2">
-                  <a
-                    href={notify.preview.approveUrl}
-                    target="_blank"
-                    rel="noreferrer"
+                  <button
+                    type="button"
+                    onClick={() => void handleDevConfirmation('approve')}
+                    disabled={devAction !== null}
                     className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-semibold px-3 py-2"
                   >
                     <CheckCircle2 className="h-4 w-4" />
-                    Подтвердить (dev)
-                    <ExternalLink className="h-3.5 w-3.5 opacity-70" />
-                  </a>
+                    {devAction === 'approve' ? 'Подтверждаем…' : 'Подтвердить (dev)'}
+                  </button>
                   {notify.preview.denyUrl && (
-                    <a
-                      href={notify.preview.denyUrl}
-                      target="_blank"
-                      rel="noreferrer"
+                    <button
+                      type="button"
+                      onClick={() => void handleDevConfirmation('deny')}
+                      disabled={devAction !== null}
                       className="inline-flex items-center justify-center gap-2 rounded-lg bg-red-900/80 hover:bg-red-800 text-red-100 text-sm font-semibold px-3 py-2"
                     >
-                      Отклонить (dev)
-                    </a>
+                      {devAction === 'deny' ? 'Отклоняем…' : 'Отклонить (dev)'}
+                    </button>
                   )}
                 </div>
               </div>
@@ -345,6 +373,7 @@ function AdminLoginPage() {
               type="button"
               variant="outline"
               onClick={handleCancelWait}
+              disabled={devAction !== null}
               className="w-full border-neutral-700 text-neutral-300"
             >
               Отменить вход

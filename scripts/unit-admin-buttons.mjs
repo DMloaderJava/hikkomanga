@@ -137,7 +137,7 @@ try {
     React.createElement(ChapterForm, {
       titleId: seed.id,
       onSubmit: async (input) => {
-        // как в admin.titles.$id.chapters.tsx: реальные данные → список
+        // как в admin.titles.$id.chapters.index.tsx: реальные данные → список
         const created = await chapters.create(input);
         createdChapterInput = input;
         return created;

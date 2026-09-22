@@ -14,7 +14,7 @@
 // (service_role) → INSERT в admin_requests. Вся логика — в _shared/submissionCore.ts
 // (тот же модуль покрывается scripts/unit-submissions.mjs).
 //
-// Секреты: CAPTCHA_PROVIDER, TURNSTILE_SECRET_KEY | HCAPTCHA_SECRET_KEY,
+// Секреты: CAPTCHA_PROVIDER, TURNSTILE_SECRET_KEY | HCAPTCHA_SECRET_KEY | RECAPTCHA_SECRET_KEY,
 // RATE_LIMIT_SALT. SUPABASE_SERVICE_ROLE_KEY доступен автоматически.
 //
 // Деплой: supabase functions deploy submit-title

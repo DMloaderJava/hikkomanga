@@ -20,7 +20,7 @@
 // Файлы лежат в submissions/{token}/ch-{n}/page-{m}.{ext} до approve;
 // перенос в manga/ делает finalize-chapter-submission.
 //
-// Секреты: CAPTCHA_PROVIDER, TURNSTILE_SECRET_KEY | HCAPTCHA_SECRET_KEY,
+// Секреты: CAPTCHA_PROVIDER, TURNSTILE_SECRET_KEY | HCAPTCHA_SECRET_KEY | RECAPTCHA_SECRET_KEY,
 // RATE_LIMIT_SALT. SUPABASE_SERVICE_ROLE_KEY доступен автоматически.
 //
 // Деплой: supabase functions deploy submit-chapters

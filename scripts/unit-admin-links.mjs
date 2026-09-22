@@ -70,7 +70,7 @@ check(
 );
 
 // Кнопка «Страницы и загрузка» — конкретный регресс из отчёта.
-const chaptersFile = 'src/routes/admin.titles.$id.chapters.tsx';
+const chaptersFile = 'src/routes/admin.titles.$id.chapters.index.tsx';
 const chaptersSrc = readFileSync(chaptersFile, 'utf8');
 const pagesButtonIdx = chaptersSrc.indexOf('Страницы и загрузка');
 const linkBefore = chaptersSrc.lastIndexOf('<Link', pagesButtonIdx);
@@ -159,7 +159,7 @@ check(
 // ── 3. Админ-лоадеры валидируют params до запроса в базу ───────────────────
 for (const f of [
   'src/routes/admin.titles.$id.chapters.$cid.tsx',
-  'src/routes/admin.titles.$id.chapters.tsx',
+  'src/routes/admin.titles.$id.chapters.index.tsx',
   'src/routes/admin.titles.$id.index.tsx',
 ]) {
   const src = readFileSync(f, 'utf8');

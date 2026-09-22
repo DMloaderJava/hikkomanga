@@ -513,6 +513,31 @@ supabase secrets set CAPTCHA_PROVIDER=hcaptcha \
 CSP уже допускает оба провайдера (vercel.json: script/frame/connect-src).
 Ключи старого провайдера можно не удалять — они просто перестают читаться.
 
+### Google reCAPTCHA v2 (галочка «Я не робот»)
+
+Виджет поддерживает `VITE_CAPTCHA_PROVIDER=recaptcha` и
+`VITE_RECAPTCHA_SITE_KEY`. Публичный site key настроен в `.env.production`;
+для локальной разработки задайте эти переменные в `.env.local`.
+Переменные Vercel имеют приоритет над файлом: удалите старое значение
+`VITE_CAPTCHA_PROVIDER=turnstile` или замените его на `recaptcha` и пересоберите сайт.
+
+1. В Google reCAPTCHA Admin Console выберите ключ **v2 → Checkbox**.
+2. Разрешите `hikkomanga.vercel.app`, а для проверки — `localhost` и точный
+   hostname Live Preview (без `https://` и пути). Не отключайте проверку домена.
+3. В Supabase Dashboard → Edge Functions → Secrets задайте
+   `CAPTCHA_PROVIDER=recaptcha` и `RECAPTCHA_SECRET_KEY` от **того же** виджета.
+   Secret Key не помещайте в `VITE_*`, Git или чат.
+4. Обновите обе функции:
+   ```bash
+   supabase functions deploy submit-title
+   supabase functions deploy submit-chapters
+   ```
+
+CSP в `vercel.json` разрешает загрузку Google API и iframe reCAPTCHA.
+Одного Site Key недостаточно для отправки заявок в реальную базу: серверная
+проверка требует Secret Key. В локальном демо-режиме заявки сохраняются в
+браузере, полноценная серверная проверка токена не выполняется.
+
 ### 9.5 Проверка и troubleshooting
 
 Локальные тесты логики (без Supabase): `npm run test:submissions`,
