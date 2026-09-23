@@ -2,6 +2,38 @@ import { getSupabase, isSupabaseConfigured } from './client';
 import type { DialogueLine } from './types';
 export type { DialogueLine };
 
+/** Тело не-2xx ответа edge-функции: supabase-js кладёт Response в `error.context`. */
+type EdgeErrorBody = { error?: string; code?: string; message?: string };
+
+async function readEdgeError(error: unknown): Promise<EdgeErrorBody | null> {
+  const context = (error as { context?: Response } | null)?.context;
+  if (!context || typeof context.json !== 'function') return null;
+  try {
+    return (await context.clone().json()) as EdgeErrorBody;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Проблемы с персональным ключом админа (см. /admin/settings).
+ *
+ * Раньше функция молча уходила на dev-proxy `/api/gemini/*` — в проде его нет,
+ * и админ видел «ошибку сервиса» вместо «добавьте ключ». Теперь такой ответ
+ * edge-функции превращается в actionable-ошибку без бесполезного fallback'а.
+ */
+const KEY_ERROR_CODES = new Set(['gemini_key_missing', 'gemini_key_unreadable']);
+
+function keyErrorMessage(body: EdgeErrorBody): Error {
+  if (body.code === 'gemini_key_missing') {
+    return new Error('Gemini API key не задан. Добавьте свой ключ в админке: /admin/settings.');
+  }
+  return new Error(
+    body.message ??
+      'Gemini API key не читается (сменён USER_KEY_ENC_SECRET?). Сохраните ключ заново: /admin/settings.'
+  );
+}
+
 function pcmToWav(
   pcm: Uint8Array,
   sampleRate = 24000,
@@ -83,6 +115,7 @@ export const gemini = {
 
     // 1. Primary: Try Supabase Edge Function invocation
     if (isSupabaseConfigured) {
+      let keyError: EdgeErrorBody | null = null;
       try {
         const supabase = await getSupabase();
         const { data, error } = await supabase.functions.invoke('gemini-proxy/analyze', {
@@ -92,9 +125,14 @@ export const gemini = {
         if (!error && data) {
           return parseGeminiResponse(data, pageIndex);
         }
+
+        const body = error ? await readEdgeError(error) : null;
+        if (body?.code && KEY_ERROR_CODES.has(body.code)) keyError = body;
       } catch {
         // Fallback to local dev middleware proxy
       }
+
+      if (keyError) throw keyErrorMessage(keyError);
     }
 
     // 2. Dev proxy fallback (/api/gemini/analyze)
@@ -128,6 +166,7 @@ export const gemini = {
 
     // 1. Primary: Try Supabase Edge Function invocation for Gemini TTS
     if (isSupabaseConfigured) {
+      let keyError: EdgeErrorBody | null = null;
       try {
         const supabase = await getSupabase();
         const { data, error } = await supabase.functions.invoke('gemini-proxy/tts', {
@@ -137,9 +176,14 @@ export const gemini = {
         if (!error && data?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) {
           responseAudioBase64 = data.candidates[0].content.parts[0].inlineData.data;
         }
+
+        const body = error ? await readEdgeError(error) : null;
+        if (body?.code && KEY_ERROR_CODES.has(body.code)) keyError = body;
       } catch {
         // Fallback to dev proxy
       }
+
+      if (keyError) throw keyErrorMessage(keyError);
     }
 
     // 2. Dev proxy fallback (/api/gemini/tts)

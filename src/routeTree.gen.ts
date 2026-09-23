@@ -17,6 +17,7 @@ import { Route as AdminAdsRouteImport } from './routes/admin.ads'
 import { Route as AdminGenresRouteImport } from './routes/admin.genres'
 import { Route as AdminLoginRouteImport } from './routes/admin.login'
 import { Route as AdminRequestsRouteImport } from './routes/admin.requests'
+import { Route as AdminSettingsRouteImport } from './routes/admin.settings'
 import { Route as AdminTitlesRouteImport } from './routes/admin.titles'
 import { Route as STokenRouteImport } from './routes/s.$token'
 import { Route as TitleSlugRouteImport } from './routes/title.$slug'
@@ -71,6 +72,11 @@ const AdminLoginRoute = AdminLoginRouteImport.update({
 const AdminRequestsRoute = AdminRequestsRouteImport.update({
   id: '/requests',
   path: '/requests',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminSettingsRoute = AdminSettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => AdminRoute,
 } as any)
 const AdminTitlesRoute = AdminTitlesRouteImport.update({
@@ -161,6 +167,7 @@ export interface FileRoutesByFullPath {
   '/admin/genres': typeof AdminGenresRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/requests': typeof AdminRequestsRoute
+  '/admin/settings': typeof AdminSettingsRoute
   '/admin/titles': typeof AdminTitlesRouteWithChildren
   '/s/$token': typeof STokenRoute
   '/title/$slug': typeof TitleSlugRouteWithChildren
@@ -185,6 +192,7 @@ export interface FileRoutesByTo {
   '/admin/genres': typeof AdminGenresRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/requests': typeof AdminRequestsRoute
+  '/admin/settings': typeof AdminSettingsRoute
   '/s/$token': typeof STokenRoute
   '/admin': typeof AdminIndexRoute
   '/admin/login/confirm': typeof AdminLoginConfirmRoute
@@ -207,6 +215,7 @@ export interface FileRoutesById {
   '/admin/genres': typeof AdminGenresRoute
   '/admin/login': typeof AdminLoginRoute
   '/admin/requests': typeof AdminRequestsRoute
+  '/admin/settings': typeof AdminSettingsRoute
   '/admin/titles': typeof AdminTitlesRouteWithChildren
   '/s/$token': typeof STokenRoute
   '/title/$slug': typeof TitleSlugRouteWithChildren
@@ -234,6 +243,7 @@ export interface FileRouteTypes {
     | '/admin/genres'
     | '/admin/login'
     | '/admin/requests'
+    | '/admin/settings'
     | '/admin/titles'
     | '/s/$token'
     | '/title/$slug'
@@ -258,6 +268,7 @@ export interface FileRouteTypes {
     | '/admin/genres'
     | '/admin/login'
     | '/admin/requests'
+    | '/admin/settings'
     | '/s/$token'
     | '/admin'
     | '/admin/login/confirm'
@@ -279,6 +290,7 @@ export interface FileRouteTypes {
     | '/admin/genres'
     | '/admin/login'
     | '/admin/requests'
+    | '/admin/settings'
     | '/admin/titles'
     | '/s/$token'
     | '/title/$slug'
@@ -361,6 +373,13 @@ declare module '@tanstack/react-router' {
       path: '/requests'
       fullPath: '/admin/requests'
       preLoaderRoute: typeof AdminRequestsRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/settings': {
+      id: '/admin/settings'
+      path: '/settings'
+      fullPath: '/admin/settings'
+      preLoaderRoute: typeof AdminSettingsRouteImport
       parentRoute: typeof AdminRoute
     }
     '/admin/titles': {
@@ -525,6 +544,7 @@ interface AdminRouteChildren {
   AdminGenresRoute: typeof AdminGenresRoute
   AdminLoginRoute: typeof AdminLoginRoute
   AdminRequestsRoute: typeof AdminRequestsRoute
+  AdminSettingsRoute: typeof AdminSettingsRoute
   AdminTitlesRoute: typeof AdminTitlesRouteWithChildren
   AdminIndexRoute: typeof AdminIndexRoute
   AdminLoginConfirmRoute: typeof AdminLoginConfirmRoute
@@ -535,6 +555,7 @@ const AdminRouteChildren: AdminRouteChildren = {
   AdminGenresRoute: AdminGenresRoute,
   AdminLoginRoute: AdminLoginRoute,
   AdminRequestsRoute: AdminRequestsRoute,
+  AdminSettingsRoute: AdminSettingsRoute,
   AdminTitlesRoute: AdminTitlesRouteWithChildren,
   AdminIndexRoute: AdminIndexRoute,
   AdminLoginConfirmRoute: AdminLoginConfirmRoute,
