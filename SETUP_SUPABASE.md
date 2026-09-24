@@ -21,7 +21,7 @@ if (isSupabaseConfigured) { /* реальный Supabase */ }
 | `VITE_SUPABASE_URL` | да | Supabase → Project Settings → API |
 | `VITE_SUPABASE_ANON_KEY` **или** `VITE_SUPABASE_PUBLISHABLE_KEY` | да | там же (anon / publishable key) |
 | `VITE_SUPABASE_PROJECT_ID` | нет | инжектит Lovable |
-| `GEMINI_API_KEY` | только для dev-middleware | **без** префикса `VITE_` — это секрет; в проде ключ у каждого админа свой (см. раздел «Gemini API key на пользователя») |
+| `GEMINI_API_KEY` | только для dev-middleware | **без** префикса `VITE_` — это секрет; подходит и новый ключ `AQ.…`, и старый `AIza…`; в проде ключ у каждого админа свой (см. раздел «Gemini API key на пользователя») |
 
 Lovable при подключении проекта через **More → Cloud → «Already have a Supabase
 project? Connect it here»** инжектит `VITE_SUPABASE_URL`,
@@ -42,6 +42,17 @@ GEMINI_API_KEY=<ключ Gemini>   # только для dev-middleware /api/gem
 `GEMINI_API_KEY` в `.env` не влияет на прод-путь: edge-функция `gemini-proxy`
 берёт ключ из `public.user_api_keys` — тот, что админ сохранил в
 `/admin/settings`. В браузер эта переменная не попадает.
+
+**`VITE_*` вкомпиливаются в бандл на сборке.** Добавили переменные в Vercel
+(или Loveable) и не сделали redeploy — сайт продолжит работать со старыми
+значениями из прошлой сборки (или из `.env.production`). Симптом ровно один:
+`/admin/settings` показывает «Supabase недоступен», хотя переменные «заданы».
+Проверка одной командой (ref, DNS, таблицы, RPC, бакеты, edge-функции,
+в том числе `gemini-proxy` / `admin-api-keys`):
+
+```bash
+npm run check:supabase
+```
 
 ## 2. Схема и RLS
 
@@ -124,7 +135,16 @@ supabase secrets set USER_KEY_ENC_SECRET="$(openssl rand -base64 32)" --project-
 в `npm run dev` и использует `GEMINI_API_KEY` из `.env`. На Lovable Cloud /
 Vercel этого middleware нет, там нужен именно edge function; в
 `src/data/gemini.ts` функция вызывается первой, а `/api/gemini/*` — запасной
-путь (ошибки про отсутствующий ключ админа из него в dev-fallback не уходят).
+путь. Форма запроса к Gemini у прода и dev одна и та же —
+`supabase/functions/_shared/gemini-tts.ts` (модели `gemini-3.8-flash` /
+`gemini-3.8-flash-tts`, ключ заголовком `x-goog-api-key`, чанки озвучки по
+2 голоса), поэтому поведение в `npm run dev` совпадает с продом.
+
+На ошибки смотрите так: структурированный ответ edge-функции
+(`code`/`message`, в том числе текст от Google) показывается админу целиком;
+dev-fallback срабатывает только тогда, когда ответа функции нет вообще
+(сеть, 404 «функция не задеплоена»). Детали и тесты — в
+`supabase/functions/_shared/gemini-tts.ts` и `scripts/unit-gemini-tts.mjs`.
 
 ## 5. Как проверить, что Supabase действительно работает
 
@@ -806,9 +826,38 @@ supabase functions deploy gemini-proxy --project-ref <project-ref>
 ```
 
 После деплоя каждый админ заходит в `/admin/settings`, вставляет свой ключ из
-[Google AI Studio](https://aistudio.google.com/app/apikey) (`AIza…`, 39 символов)
-и получает статус «подключён». Пока ключа нет, `gemini-proxy` отвечает
-403 `gemini_key_missing`, а страница настроек показывает баннер.
+[Google AI Studio](https://aistudio.google.com/app/apikey) и получает статус
+«подключён». Подходят **оба** формата ключей:
+
+- новый auth-ключ `AQ.Ab…` — именно такие AI Studio выдаёт с 28 мая 2026;
+- старый standard key `AIza…` (39 символов) — пока Google их принимает
+  (с сентября 2026 standard-ключи отклоняются на стороне API, см. ниже).
+
+Пока ключа нет, `gemini-proxy` отвечает 403 `gemini_key_missing`, а страница
+настроек показывает баннер.
+
+#### Форматы ключей Gemini: `AIza…` → `AQ.…`
+
+- Валидация в форме и в `admin-api-keys` **сознательно не проверяет префикс**:
+  только ASCII-алфавит и длину 20–512. Прежнее правило «`AIza` + 35 = 39»
+  отклоняло новые ключи ещё до запроса к Google («Ключ должен начинаться с
+  AIza и содержать 39 символов»), а формат ключа — не контракт: следующий
+  префикс сломал бы проверку снова. По-настоящему ключ проверяет только Gemini.
+- Ключ уходит в Gemini **заголовком `x-goog-api-key`**, а не `?key=` в URL:
+  новые auth-ключи с query-параметром не работают вообще (Google отвечает 404).
+  Так же формирует запрос и dev-middleware в `vite.config.ts` — форма запроса
+  живёт в `supabase/functions/_shared/gemini-tts.ts` одна на двоих.
+- Модели: `gemini-3.8-flash` (анализ страниц) и `gemini-3.8-flash-tts`
+  (озвучка). Старые `gemini-2.5-*` в коде не используются: 2.5 оставили
+  только тем, кто ими уже пользовался, новым проектам рекомендуют 3.8.
+- Озвучка: Gemini 3.8 TTS держит максимум **два голоса на запрос**, поэтому
+  глава с большим числом персонажей режется на чанки по 2 голоса (до 8
+  запросов), а PCM-аудио склеивается в один поток внутри `gemini-proxy`.
+  Порядок реплик сохраняется, для клиента ответ выглядит как один запрос.
+- Голос персонажа: `voiceMap[speaker]`, если это имя из списка 30 prebuilt-голосов
+  (`Kore`, `Puck`, `Fenrir`, …); иначе — `Kore`/`Puck` по порядку появления.
+  Неизвестное имя (например, `Fola`) откатывается на дефолт, чтобы Gemini не
+  ответил 400.
 
 ### Ротация USER_KEY_ENC_SECRET
 
@@ -830,8 +879,13 @@ supabase functions deploy gemini-proxy --project-ref <project-ref>
 | Симптом | Причина и что делать |
 | --- | --- |
 | На странице настроек `db_error` про отсутствующую таблицу | Миграция `00000000000017_user_api_keys.sql` не применена. `supabase db push` |
+| «Ключ должен начинаться с AIza и содержать 39 символов» | Так работала **старая** сборка/задеплоенная функция. Обновите код и задеплойте заново: `supabase functions deploy admin-api-keys` + redeploy сайта |
 | `enc_secret_missing` / `enc_secret_invalid` при сохранении | Edge Secret `USER_KEY_ENC_SECRET` не задан или это не base64 от 32 байт. Сгенерируйте заново: `openssl rand -base64 32` |
 | `gemini_key_unreadable` при озвучке | Секрет сменили, а старые записи остались. Ротация выше (п. 3–4) |
 | Озвучка падает с «Gemini API key не задан» | У текущего админа нет своего ключа: `/admin/settings` |
-| Google отвечает 400/403 в теле ответа | Ключ сохранён, но отклонён самим Gemini (неверный/просроченный/без доступа к модели). Замените ключ |
+| `Supabase недоступен: запрос к <host> не прошёл` | Клиент не достучался до edge-функции. `<host>` — то, что реально зашито в бандл: если это старый/удалённый ref, обновите `VITE_SUPABASE_*` на хостинге и сделайте redeploy (раздел «Если проект Supabase пересоздавали или удаляли») |
+| Google отвечает 400/403 в теле ответа | Ключ сохранён, но отклонён самим Gemini (неверный/просроченный/без доступа к модели, исчерпана квота). Замените ключ. Текст ошибки Gemini теперь доходит до UI как есть |
+| Google отвечает 404 при сохранённом ключе | Ключ ушёл в query-параметре `?key=`: так работала старая версия `gemini-proxy`. Новые auth-ключи `AQ.…` так не работают. Задеплойте актуальный код: `supabase functions deploy gemini-proxy` |
+| Озвучка: `tts_too_many_requests` | В главе больше 16 персонажей (8 запросов × 2 голоса — потолок Gemini 3.8 TTS). Сократите число говорящих или озвучьте главу по частям |
+| Озвучка: `tts_no_lines` | В сценарии нет непустых реплик — сначала прогоните анализ страниц или заполните текст в редакторе реплик |
 | Ошибки `admin-api-keys` 404 | Функция не задеплоена: `supabase functions deploy admin-api-keys` |

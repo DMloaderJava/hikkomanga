@@ -12,9 +12,11 @@
  *   3. таблицы из supabase/migrations: чего нет и какой файл накатить;
  *   4. RPC Login Guard и has_role;
  *   5. бакеты storage: manga, hikko-originals, voiceovers;
- *   6. Edge Functions login-notify / login-confirm:
+ *   6. Edge Functions login-notify / login-confirm / gemini-proxy /
+ *      admin-api-keys:
  *      401 без Authorization ⇒ задеплоена (шлюз), 404 ⇒ нет;
  *      400 на login-confirm с валидным ключом ⇒ код функции работает;
+ *      401 на gemini-* с публичным ключом ⇒ функция жива и закрыта админом;
  *   7. настройки Auth: открытая регистрация, авто-подтверждение почты.
  *
  * Окружение читается так же, как сборкой (`loadEnv` + process.env), поэтому
@@ -290,6 +292,12 @@ section('6. Edge Functions');
 const FUNCTION_CHECKS = [
   ['login-notify', 401, null],
   ['login-confirm', 400, 'token and action=approve|deny required'],
+  // Gemini-функции закрыты ролью admin: с публичным ключом (это анонимный
+  // пользователь) они обязаны вернуть 401 unauthorized. Так чекер проверяет
+  // именно факт деплоя — без него «Supabase недоступен» на /admin/settings
+  // пришлось бы ловить в браузере.
+  ['gemini-proxy', 401, 'unauthorized'],
+  ['admin-api-keys', 401, 'unauthorized'],
 ];
 for (const [fn, expectStatus, expectBody] of FUNCTION_CHECKS) {
   const noAuth = await api(`/functions/v1/${fn}`, { method: 'POST', body: {}, withAuth: false });

@@ -34,6 +34,48 @@ function keyErrorMessage(body: EdgeErrorBody): Error {
   );
 }
 
+/**
+ * Структурированный ответ edge-функции → ошибка для UI.
+ *
+ * `gemini-proxy` теперь отдаёт ошибки в одном формате (`error`/`code`/`message`)
+ * и для озвучки, и для анализа: текст Gemini («API key not valid», «model not
+ * found», лимиты) доходит до админа как есть, а не превращается в «404 от
+ * /api/gemini/tts» после бесполезного dev-fallback'а.
+ *
+ * `null` — ответа нашей функции нет (сеть, 404 «функция не задеплоена»,
+ * не-JSON тело): только в этом случае имеет смысл пробовать dev-proxy.
+ */
+function edgeErrorFrom(body: EdgeErrorBody | null): Error | null {
+  if (!body) return null;
+
+  const code = typeof body.code === 'string' ? body.code : '';
+  if (code && KEY_ERROR_CODES.has(code)) return keyErrorMessage(body);
+
+  const message = typeof body.message === 'string' ? body.message.trim() : '';
+  if (message) return new Error(message);
+
+  const error = typeof body.error === 'string' ? body.error : '';
+  if (error) return new Error(`Gemini недоступен: ${error}. Подробности — в логах edge-функции gemini-proxy.`);
+
+  return null;
+}
+
+/** Ошибка dev-proxy `/api/gemini/*`: читаем { message } из тела, если оно есть. */
+async function devProxyError(scope: string, res: Response): Promise<Error> {
+  const body = await res.json().catch(() => null);
+  const message = typeof body?.message === 'string' ? body.message.trim() : '';
+  if (message) return new Error(message);
+
+  if (isSupabaseConfigured && res.status === 404) {
+    return new Error(
+      `${scope}: 404 от /api/gemini/* (dev-middleware есть только в npm run dev). ` +
+        'Проверьте, что edge-функция задеплоена: supabase functions deploy gemini-proxy.'
+    );
+  }
+
+  return new Error(`${scope} (${res.status} ${res.statusText})`);
+}
+
 function pcmToWav(
   pcm: Uint8Array,
   sampleRate = 24000,
@@ -115,7 +157,7 @@ export const gemini = {
 
     // 1. Primary: Try Supabase Edge Function invocation
     if (isSupabaseConfigured) {
-      let keyError: EdgeErrorBody | null = null;
+      let edgeError: Error | null = null;
       try {
         const supabase = await getSupabase();
         const { data, error } = await supabase.functions.invoke('gemini-proxy/analyze', {
@@ -126,16 +168,16 @@ export const gemini = {
           return parseGeminiResponse(data, pageIndex);
         }
 
-        const body = error ? await readEdgeError(error) : null;
-        if (body?.code && KEY_ERROR_CODES.has(body.code)) keyError = body;
+        edgeError = edgeErrorFrom(error ? await readEdgeError(error) : null);
       } catch {
-        // Fallback to local dev middleware proxy
+        // Сеть/шлюз: ниже пробуем dev-middleware — в проде его нет, и тогда
+        // администратор получит понятную подсказку про деплой (devProxyError).
       }
 
-      if (keyError) throw keyErrorMessage(keyError);
+      if (edgeError) throw edgeError;
     }
 
-    // 2. Dev proxy fallback (/api/gemini/analyze)
+    // 2. Dev proxy fallback (/api/gemini/analyze) — есть только в npm run dev.
     const res = await fetch('/api/gemini/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -143,7 +185,7 @@ export const gemini = {
     });
 
     if (!res.ok) {
-      throw new Error(`Ошибка сервиса анализа Gemini (${res.status} ${res.statusText})`);
+      throw await devProxyError('Ошибка сервиса анализа Gemini', res);
     }
 
     const data = await res.json();
@@ -164,9 +206,12 @@ export const gemini = {
 
     let responseAudioBase64: string | null = null;
 
-    // 1. Primary: Try Supabase Edge Function invocation for Gemini TTS
+    // 1. Primary: Try Supabase Edge Function invocation for Gemini TTS.
+    //    Модель gemini-3.8-flash-tts держит максимум 2 голоса на запрос,
+    //    поэтому глава с большим числом персонажей режется на чанки и
+    //    склеивается в один PCM уже внутри gemini-proxy — форма ответа та же.
     if (isSupabaseConfigured) {
-      let keyError: EdgeErrorBody | null = null;
+      let edgeError: Error | null = null;
       try {
         const supabase = await getSupabase();
         const { data, error } = await supabase.functions.invoke('gemini-proxy/tts', {
@@ -177,16 +222,15 @@ export const gemini = {
           responseAudioBase64 = data.candidates[0].content.parts[0].inlineData.data;
         }
 
-        const body = error ? await readEdgeError(error) : null;
-        if (body?.code && KEY_ERROR_CODES.has(body.code)) keyError = body;
+        edgeError = edgeErrorFrom(error ? await readEdgeError(error) : null);
       } catch {
-        // Fallback to dev proxy
+        // Сеть/шлюз: ниже пробуем dev-middleware.
       }
 
-      if (keyError) throw keyErrorMessage(keyError);
+      if (edgeError) throw edgeError;
     }
 
-    // 2. Dev proxy fallback (/api/gemini/tts)
+    // 2. Dev proxy fallback (/api/gemini/tts) — есть только в npm run dev.
     if (!responseAudioBase64) {
       const res = await fetch('/api/gemini/tts', {
         method: 'POST',
@@ -202,7 +246,7 @@ export const gemini = {
           throw new Error(`Ошибка Gemini TTS: ${data.error.message || data.error}`);
         }
       } else {
-        throw new Error(`Ошибка сервиса Gemini TTS (${res.status} ${res.statusText})`);
+        throw await devProxyError('Ошибка сервиса Gemini TTS', res);
       }
     }
 

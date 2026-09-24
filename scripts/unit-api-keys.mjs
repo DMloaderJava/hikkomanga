@@ -10,11 +10,16 @@
  *      и на сервере — одна и та же регулярка;
  *   3. миграция — RLS, 4 политики, unique-версии файлов;
  *   4. демо-режим data-слоя: ключ не сохраняется и не утекает в storage;
- *   5. SSR-рендер /admin/settings: баннер «ключ не задан», маска `AIza…••••XXXX`
+ *   5. SSR-рендер /admin/settings: баннер «ключ не задан», маска `••••••••XXXX`
  *      и отсутствие плейнтекста в разметке.
  *
- * Плейнтекст тестового ключа — синтетический (`AIza` + 35 символов), реального
- * секрета в репозитории нет.
+ * Плейнтексты тестовых ключей — синтетические (`AIza` + 35 символов = 39 и
+ * новый auth-ключ `AQ.…`), реальных секретов в репозитории нет.
+ *
+ * Отдельная тема — форматы ключей: с мая 2026 AI Studio выдаёт auth-ключи
+ * `AQ.Ab…`, и старая проверка «AIza + 35 символов» отклоняла их ещё до запроса
+ * к Google. Здесь проверяются оба формата и то, что префикс больше не
+ * зашит в валидацию (ни в клиент, ни в edge-функцию).
  */
 import { createServer } from 'vite';
 import { readFileSync, readdirSync } from 'node:fs';
@@ -30,8 +35,21 @@ const check = (name, cond, detail = '') => {
 
 const read = (path) => readFileSync(path, 'utf8');
 
-// Синтетический ключ правильного формата: AIza + 35 символов = 39.
+/**
+ * Комментарии не считаем при проверках «старой логики больше нет»: в доках
+ * мы специально цитируем прежнюю регулярку `AIza…`, объясняя, почему её убрали.
+ */
+const stripComments = (source) =>
+  source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/(^|[^:])\/\/.*$/gm, '$1');
+
+// Синтетический «старый» standard key: AIza + 35 символов = 39.
 const VALID_KEY = `AIza${'SyTestKey0123456789'.padEnd(31, 'x')}wxyz`;
+// Синтетический «новый» auth key: AI Studio с мая 2026 выдаёт ключи вида
+// `AQ.<случайные символы>` (пользовательский пример в багрепорте —
+// `AQ.Ab8RN6LzQh0yu_zDGMhlbalfpE`). Секрета здесь нет — строка выдумана.
+const AUTH_KEY = 'AQ.Ab8RN6LzUnitTestKey_0123456789zyxw';
 const SECRET = Buffer.from('unit-test-secret-32-bytes-long!!').toString('base64');
 
 const vite = await createServer({ ...DEMO_SERVER_OPTIONS, mode: 'test' });
@@ -47,7 +65,11 @@ try {
   } = await vite.ssrLoadModule('/supabase/functions/_shared/crypto.ts');
 
   check('1a. ENC_SECRET_ENV = USER_KEY_ENC_SECRET', ENC_SECRET_ENV === 'USER_KEY_ENC_SECRET', ENC_SECRET_ENV);
-  check('1a*. тестовый ключ — 39 символов', VALID_KEY.length === 39, String(VALID_KEY.length));
+  check(
+    '1a*. тестовые ключи: старый AIza… (39) и новый AQ.… — разной длины',
+    VALID_KEY.length === 39 && AUTH_KEY.startsWith('AQ.') && AUTH_KEY.length !== 39,
+    `${VALID_KEY.length} / ${AUTH_KEY.length}`
+  );
 
   const encrypted = await encryptSecret(VALID_KEY, { secret: SECRET });
   check(
@@ -169,14 +191,15 @@ try {
     adminCors.methods
   );
 
-  // Тело регулярки из литерала `/^AIza…/;` — сравниваем клиент и сервер побайтово.
-  const patternSourceOf = (source, where) => {
-    const literal = source.match(/\/\^AIza\[[^/]+\/\s*;/)?.[0];
+  // Тело регулярки берём по имени константы (клиент — GEMINI_API_KEY_RE,
+  // сервер — GEMINI_KEY_RE) и сравниваем побайтово: одна проверка на двоих.
+  const patternSourceOf = (source, where, name) => {
+    const literal = source.match(new RegExp(`(?:export )?const ${name} = \\/(.+)\\/;`))?.[1];
     if (!literal) throw new Error(`Не найден regex формата ключа: ${where}`);
-    return literal.slice(1, literal.lastIndexOf('/'));
+    return literal;
   };
-  const serverPattern = patternSourceOf(adminFn, 'admin-api-keys');
-  const clientPattern = patternSourceOf(clientData, 'src/data/apiKeys.ts');
+  const serverPattern = patternSourceOf(adminFn, 'admin-api-keys', 'GEMINI_KEY_RE');
+  const clientPattern = patternSourceOf(clientData, 'src/data/apiKeys.ts', 'GEMINI_API_KEY_RE');
   const serverRe = new RegExp(serverPattern);
   const clientRe = new RegExp(clientPattern);
   check(
@@ -184,15 +207,23 @@ try {
     serverPattern === clientPattern && serverRe.source === clientRe.source,
     `/${serverPattern}/`
   );
+  check(
+    '2g*. префикс AIza больше не зашит в валидацию',
+    !serverPattern.includes('AIza') && !clientPattern.includes('AIza'),
+    `/${serverPattern}/`
+  );
   const samples = [
-    [VALID_KEY, true],
-    [`AIza${'x'.repeat(34)}`, false], // 38 символов
-    [`AIza${'x'.repeat(36)}`, false], // 40 символов
-    ['AIzbSyTestKey0123456789_abcdefghij', false], // не AIza
-    [` ${VALID_KEY} `, false], // пробелы
+    [VALID_KEY, true], // старый standard key, 39 символов
+    [AUTH_KEY, true], // новый auth key AQ.…
+    [`AQ.${'A'.repeat(400)}`, true], // будущие длинные ключи (лимит 512)
+    [`AIza${'x'.repeat(38)}`, true], // длина — не контракт: 38 символов не блокируем
+    ['short_key_18_chars', false], // 18 символов — короче минимума
+    [`AIza${'x'.repeat(600)}`, false], // 604 символа — длиннее лимита
+    ['AQ.ключ-кириллицей-0123456789', false], // не ASCII
+    [` ${VALID_KEY} `, false], // пробелы (форма тримит до проверки)
   ];
   check(
-    '2h. валидация ключа: валидный проходит, мусор — нет (клиент + сервер)',
+    '2h. валидация ключа: оба формата проходят, мусор и границы — нет (клиент + сервер)',
     samples.every(([key, ok]) => serverRe.test(key) === ok && clientRe.test(key) === ok)
   );
 
@@ -252,6 +283,25 @@ try {
     demoSave instanceof ApiKeyError && demoSave.code === 'demo_mode',
     demoSave?.code
   );
+
+  // Главная регрессия багрепорта: новый auth-ключ AQ.… доходит до сети
+  // (в демо-режиме это demo_mode), а не падает на «должен начинаться с AIza».
+  const authSave = await apiKeys.save(AUTH_KEY).then(
+    () => null,
+    (error) => error
+  );
+  check(
+    '4c*. новый ключ AQ.… проходит клиентскую валидацию (доходит до demo_mode)',
+    authSave instanceof ApiKeyError && authSave.code === 'demo_mode',
+    authSave?.code
+  );
+  const clientCode = stripComments(clientData);
+  check(
+    '4c**. текст invalid_key_format больше не требует префикса AIza и 39 символов',
+    !/начинаться с AIza|содержать 39/.test(clientCode) &&
+      !/AIza\[0-9/.test(clientCode) &&
+      !/AIza\[0-9/.test(stripComments(adminFn))
+  );
   const demoRemove = await apiKeys.remove().then(
     () => null,
     (error) => error
@@ -299,7 +349,8 @@ try {
     '5b. без ключа: кнопки сохранения и удаления неактивны/не отрисованы',
     missingHtml.includes('Сохранить') &&
       !missingHtml.includes('Удалить ключ') &&
-      missingHtml.includes('AIza…')
+      // Плейсхолдер принимает оба формата ключа — новый AQ.… и старый AIza…
+      missingHtml.includes('AQ.… или AIza…')
   );
 
   const connectedHtml = renderSettings({
@@ -307,8 +358,10 @@ try {
     demo: false,
   });
   check(
-    '5c. с ключом: показана маска AIza…••••9xYZ и статус «подключён»',
-    connectedHtml.includes('AIza…••••9xYZ') && connectedHtml.includes('подключён')
+    '5c. с ключом: показана маска ••••••••9xYZ (без префикса AIza) и статус «подключён»',
+    connectedHtml.includes('••••••••9xYZ') &&
+      connectedHtml.includes('подключён') &&
+      !connectedHtml.includes('AIza…••••')
   );
   check(
     '5d. с ключом: есть замена и удаление, плейнтекста в разметке нет',
