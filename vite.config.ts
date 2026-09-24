@@ -424,6 +424,14 @@ export default defineConfig(({ mode }) => {
         },
       },
     ],
+    // Какие env-переменные Vite вшивает в бандл. Кроме родных `VITE_*`
+    // принимаем `NEXT_PUBLIC_*`: проекты, заведённые на хостинге по шаблону
+    // Next.js, держат Supabase-ключи под этими именами
+    // (`NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`).
+    // Префикс `SUPABASE_` здесь отсутствует сознательно — иначе в браузерный
+    // бандл утёк бы `SUPABASE_SERVICE_ROLE_KEY`. Публичные ключи читаются в
+    // `src/integrations/supabase/config.ts`.
+    envPrefix: ['VITE_', 'NEXT_PUBLIC_'],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, './src'),

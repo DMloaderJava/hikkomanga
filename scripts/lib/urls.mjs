@@ -5,10 +5,32 @@
 import { loadEnv } from 'vite';
 import { createClient } from '@supabase/supabase-js';
 
+/**
+ * Алиасы публичных env-имён. Значения те же, но названия зависят от хостинга:
+ * проекты, заведённые по шаблону Next.js, держат их под `NEXT_PUBLIC_*`, а
+ * CI/edge-окружения Supabase — под `SUPABASE_*`. Канонические `VITE_*` имеют
+ * приоритет: алиас подставляется только если каноническое имя пустое.
+ */
+const ENV_ALIASES = [
+  ['VITE_SUPABASE_URL', 'NEXT_PUBLIC_SUPABASE_URL', 'SUPABASE_URL'],
+  ['VITE_SUPABASE_ANON_KEY', 'NEXT_PUBLIC_SUPABASE_ANON_KEY'],
+  ['VITE_SUPABASE_PUBLISHABLE_KEY', 'NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY'],
+  ['VITE_SUPABASE_PROJECT_ID', 'NEXT_PUBLIC_SUPABASE_PROJECT_ID'],
+  ['VITE_SITE_URL', 'NEXT_PUBLIC_SITE_URL'],
+];
+
 /** VITE_* из .env + реальные переменные окружения (Vercel/CI). */
 export function buildEnv() {
   const fileEnv = loadEnv('production', process.cwd(), '');
-  return { ...fileEnv, ...process.env };
+  const env = { ...fileEnv, ...process.env };
+
+  for (const [canonical, ...aliases] of ENV_ALIASES) {
+    if (String(env[canonical] ?? '').trim() !== '') continue;
+    const alias = aliases.find((name) => String(env[name] ?? '').trim() !== '');
+    if (alias) env[canonical] = env[alias];
+  }
+
+  return env;
 }
 
 /**

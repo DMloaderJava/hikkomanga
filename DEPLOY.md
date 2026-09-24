@@ -104,6 +104,14 @@ Vercel → Settings → Environment Variables (Production и Preview):
 
 После сохранения — обязательный **Redeploy**: Vite вшивает env на этапе сборки.
 
+Если Supabase-значения на Vercel названы по Next.js-шаблону
+(`NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`), дублировать их в
+`VITE_*` не обязательно: `envPrefix` в `vite.config.ts` читает и `NEXT_PUBLIC_*`.
+Проверка после пересборки — первый раздел `npm run check:supabase`: там видно,
+какой URL/ключ увидела сборка. Не переименовывайте переменные в
+`SUPABASE_ANON_KEY`: префикс `SUPABASE_` в браузерный бандл не попадает (защита
+от `SUPABASE_SERVICE_ROLE_KEY`), для клиента нужно имя `VITE_SUPABASE_ANON_KEY`.
+
 ### 5. Cron (опционально)
 
 Supabase Dashboard → Database → Cron:

@@ -31,6 +31,15 @@ project? Connect it here»** инжектит `VITE_SUPABASE_URL`,
 
 Service-role key в браузер класть нельзя — в `VITE_*` он не читается специально.
 
+Алиасы имён. На хостингах, где проект заводили по шаблону Next.js, те же
+публичные значения лежат под `NEXT_PUBLIC_SUPABASE_URL` /
+`NEXT_PUBLIC_SUPABASE_ANON_KEY` — они принимаются наравне с `VITE_*` (белый
+список `envPrefix` в `vite.config.ts`), дублировать руками не нужно. Голый
+`SUPABASE_ANON_KEY` в бандл НЕ попадает: префикс `SUPABASE_` не в белом списке,
+иначе по тем же правилам утёк бы `SUPABASE_SERVICE_ROLE_KEY`. Если на хосте
+ключ назван `SUPABASE_ANON_KEY` — продублируйте его как `VITE_SUPABASE_ANON_KEY`
+(в скриптах сборки он читается и так, см. `scripts/lib/urls.mjs`).
+
 Локально: создайте `.env` в корне (файл в `.gitignore`), затем `npm run dev`:
 
 ```bash

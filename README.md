@@ -41,6 +41,12 @@ npm run typecheck
 | `PRERENDER_CHAPTERS=0` | не пререндерить страницы глав |
 | `PRERENDER_MAX_URLS=1000` | лимит страниц за сборку |
 
+На хостинге те же значения могут лежать под другими именами: помимо `VITE_*`
+принимаются `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` и
+`NEXT_PUBLIC_SITE_URL` (белый список `envPrefix` в `vite.config.ts`). Голые
+`SUPABASE_*` в браузерный бандл не читаются — под этим префиксом лежит
+`SUPABASE_SERVICE_ROLE_KEY`, которому в браузере не место.
+
 Отдельные команды: `npm run sitemap`, `npm run prerender`,
 `npm run build:spa` (сборка без sitemap/пререндера).
 

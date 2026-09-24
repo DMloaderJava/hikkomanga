@@ -1,14 +1,18 @@
 /**
  * Базовый адрес сайта. Нужен для абсолютных ссылок в canonical / og:url /
  * sitemap.xml. Задаётся переменной `VITE_SITE_URL` (см. .env.example) — на
- * проде это https-домен без завершающего слэша.
+ * проде это https-домен без завершающего слэша. Принимается и
+ * `NEXT_PUBLIC_SITE_URL` (такое имя env бывает у проектов, заведённых по
+ * шаблону Next.js, см. `envPrefix` в vite.config.ts).
  *
  * В браузере, если переменная не задана, подставляется текущий origin.
  * В Node (скрипты сборки) `window` нет — тогда остаётся только переменная.
  */
 const env = import.meta.env as Record<string, string | undefined>;
 
-const configured = (env.VITE_SITE_URL ?? '').trim().replace(/\/+$/, '');
+const configured = (env.VITE_SITE_URL || env.NEXT_PUBLIC_SITE_URL || '')
+  .trim()
+  .replace(/\/+$/, '');
 
 export const SITE_URL: string =
   configured || (typeof window !== 'undefined' ? window.location.origin : '');
