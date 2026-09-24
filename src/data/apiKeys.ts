@@ -1,4 +1,5 @@
 import { getSupabase, isSupabaseConfigured } from './client';
+import { SUPABASE_URL } from '@/integrations/supabase/config';
 
 /**
  * Персональный Gemini API key админа: статус, сохранение, удаление.
@@ -13,8 +14,23 @@ import { getSupabase, isSupabaseConfigured } from './client';
  * с кодом `demo_mode`. В localStorage ключ не пишется ни в каком виде.
  */
 
-/** Gemini API key: `AIza` + 35 символов = 39. Копия в admin-api-keys/index.ts. */
-export const GEMINI_API_KEY_RE = /^AIza[0-9A-Za-z_\-]{35}$/;
+/**
+ * Gemini API key: опаковая строка, БЕЗ проверки префикса.
+ *
+ * Раньше здесь стояло `/^AIza[0-9A-Za-z_\-]{35}$/` («AIza + 35 = 39») — это
+ * ровно тот случай, когда валидация ломается раньше Google: с 28 мая 2026
+ * AI Studio выдаёт auth-ключи нового вида (`AQ.Ab8RN6…`), и старый шаблон
+ * начал отклонять заведомо рабочие ключи («Ключ должен начинаться с AIza и
+ * содержать 39 символов»). Формат ключа — не контракт: следующий префикс
+ * сломал бы проверку снова.
+ *
+ * Что осталось: страховка от мусора/опечаток — только ASCII-безопасный
+ * алфавит и разумные границы длины. 20 символов — короче не бывает ни у
+ * `AIza…` (39), ни у `AQ.…` (30+); 512 — с запасом на будущие форматы.
+ * Проверка продублирована в edge-функции (admin-api-keys/index.ts), расхождение
+ * ловит scripts/unit-api-keys.mjs.
+ */
+export const GEMINI_API_KEY_RE = /^[A-Za-z0-9._\-]{20,512}$/;
 export const GEMINI_PROVIDER = 'gemini';
 
 export interface ApiKeyStatus {
@@ -58,16 +74,35 @@ export class ApiKeyError extends Error {
   }
 }
 
+/**
+ * Хост Supabase для текста ошибки. «Supabase недоступен» без адреса — худший
+ * вид диагностики: чаще всего сборка смотрит в СТАРЫЙ/удалённый проект
+ * (переменные на хостинге не обновили или не сделали redeploy), и по хосту
+ * это видно сразу.
+ */
+function supabaseHostLabel(): string {
+  if (!SUPABASE_URL) return 'supabase (VITE_SUPABASE_URL пуст)';
+  try {
+    return new URL(SUPABASE_URL).host;
+  } catch {
+    return SUPABASE_URL;
+  }
+}
+
 /** Человеческие подсказки: код от edge-функции → что делать админу. */
 export const API_KEY_ERROR_MESSAGES: Record<string, string> = {
   unauthorized: 'Сессия истекла — войдите в админку заново.',
   forbidden: 'Нужен аккаунт с ролью admin.',
-  invalid_key_format: 'Ключ должен начинаться с AIza и содержать 39 символов.',
+  invalid_key_format:
+    'Ключ выглядит некорректно: нужна строка из 20–512 символов без пробелов ' +
+    '(новый auth-ключ AQ.… или старый AIza…). Скопируйте ключ целиком из Google AI Studio.',
   db_error: 'База отклонила запись. Проверьте, что применена миграция 00000000000017_user_api_keys.sql.',
   enc_secret_missing: 'На сервере не задан Edge Secret USER_KEY_ENC_SECRET (см. SETUP_SUPABASE.md).',
   enc_secret_invalid: 'USER_KEY_ENC_SECRET задан неверно: нужен base64 от 32 байт (openssl rand -base64 32).',
   fn_not_deployed: 'Edge-функция admin-api-keys не задеплоена: supabase functions deploy admin-api-keys.',
-  network: 'Supabase недоступен: проверьте соединение.',
+  network:
+    `Supabase недоступен: запрос к ${supabaseHostLabel()} не прошёл. ` +
+    'Проверьте соединение и переменные VITE_SUPABASE_* на хостинге — после их правки нужен redeploy (см. SETUP_SUPABASE.md).',
   unknown: 'Не удалось выполнить запрос к admin-api-keys.',
   demo_mode: 'Демо-режим: Supabase не настроен, ключ сохранить некуда.',
 };

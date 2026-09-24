@@ -29,11 +29,15 @@ const corsHeaders = {
 const PROVIDER = 'gemini';
 
 /**
- * Gemini API key: `AIza` + 35 символов = 39 символов.
- * Дублируется в src/data/apiKeys.ts (префиксная валидация в форме);
- * расхождение ловит scripts/unit-api-keys.mjs.
+ * Gemini API key: опаковая строка, БЕЗ проверки префикса.
+ *
+ * Проверять «AIza + 35 = 39» нельзя: с мая 2026 AI Studio выдаёт auth-ключи
+ * `AQ.…`, а Google прямо предупреждает, что формат ключа — не контракт.
+ * Здесь та же регулярка, что в src/data/apiKeys.ts (валидация до сети в форме);
+ * расхождение ловит scripts/unit-api-keys.mjs. По-настоящему ключ проверяет
+ * только сам Gemini — при первом же запросе (см. gemini-proxy).
  */
-const GEMINI_KEY_RE = /^AIza[0-9A-Za-z_\-]{35}$/;
+const GEMINI_KEY_RE = /^[A-Za-z0-9._\-]{20,512}$/;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -112,7 +116,7 @@ serve(async (req) => {
       // Сам ключ в ответе/логах не повторяем.
       return json({
         error: 'invalid_key_format',
-        message: 'Ожидается Gemini API key вида AIza… (39 символов)',
+        message: 'Ключ выглядит некорректно: нужна строка из 20–512 символов без пробелов (AQ.… или AIza…)',
       }, 400);
     }
 

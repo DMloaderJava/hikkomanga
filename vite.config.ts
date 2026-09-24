@@ -9,6 +9,20 @@ import {
   buildLoginMailSubject,
 } from './supabase/functions/_shared/loginMailTemplate.ts';
 import { generateLoginChallengeToken } from './supabase/functions/_shared/loginChallengeToken.ts';
+// Тот же сборщик запросов к Gemini, что и в edge-функции gemini-proxy:
+// dev-middleware и прод не разъезжаются по модели/форме запроса.
+import {
+  GEMINI_ANALYZE_MODEL,
+  GEMINI_TTS_MODEL,
+  TtsPlanError,
+  buildTtsResponse,
+  extractTtsAudio,
+  geminiEndpoint,
+  geminiErrorMessage,
+  geminiHeaders,
+  mergeTtsAudio,
+  planTtsRequests,
+} from './supabase/functions/_shared/gemini-tts.ts';
 import path from 'path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
@@ -123,104 +137,126 @@ export default defineConfig(({ mode }) => {
         name: 'gemini-proxy-middleware',
         configureServer(server) {
           server.middlewares.use(async (req, res, next) => {
+            // Формат ответов — как у edge-функции gemini-proxy: успех = сырой
+            // ответ Gemini, ошибка = { error, code, message } с понятным текстом.
+            const sendJson = (status: number, body: unknown) => {
+              res.statusCode = status;
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify(body));
+            };
+
+            const readJsonBody = () =>
+              new Promise<any>((resolve, reject) => {
+                let bodyStr = '';
+                req.on('data', (chunk) => (bodyStr += chunk));
+                req.on('end', () => {
+                  try {
+                    resolve(bodyStr ? JSON.parse(bodyStr) : {});
+                  } catch (error) {
+                    reject(error);
+                  }
+                });
+              });
+
             // 1. Analyze endpoint
             if (req.url?.startsWith('/api/gemini/analyze') && req.method === 'POST') {
               if (!geminiApiKey) {
-                res.statusCode = 500;
-                res.setHeader('Content-Type', 'application/json');
-                res.end(JSON.stringify({ error: 'GEMINI_API_KEY is not configured in .env' }));
+                sendJson(500, { error: 'GEMINI_API_KEY is not configured in .env' });
                 return;
               }
 
-              let bodyStr = '';
-              req.on('data', (chunk) => (bodyStr += chunk));
-              req.on('end', async () => {
-                try {
-                  const { imageBase64, mimeType } = JSON.parse(bodyStr);
-                  const promptText = `Ты — анализатор манги. Извлеки все диалоговые облака и закадровый текст со страницы. Верни СТРОГО чистый JSON массив без кода или markdown: [{"speaker":"Speaker1","text":"..."}]`;
+              try {
+                const { imageBase64, mimeType } = await readJsonBody();
+                const promptText = `Ты — анализатор манги. Извлеки все диалоговые облака и закадровый текст со страницы. Верни СТРОГО чистый JSON массив без кода или markdown: [{"speaker":"Speaker1","text":"..."}]`;
 
-                  const googleRes = await fetch(
-                    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${geminiApiKey}`,
-                    {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        contents: [
-                          {
-                            parts: [
-                              { text: promptText },
-                              { inline_data: { mime_type: mimeType || 'image/jpeg', data: imageBase64 } },
-                            ],
-                          },
+                const googleRes = await fetch(geminiEndpoint(GEMINI_ANALYZE_MODEL), {
+                  method: 'POST',
+                  headers: geminiHeaders(geminiApiKey),
+                  body: JSON.stringify({
+                    contents: [
+                      {
+                        parts: [
+                          { text: promptText },
+                          { inlineData: { mimeType: mimeType || 'image/jpeg', data: imageBase64 } },
                         ],
-                      }),
-                    }
-                  );
+                      },
+                    ],
+                  }),
+                });
 
-                  const data = await googleRes.json();
-                  res.statusCode = googleRes.status;
-                  res.setHeader('Content-Type', 'application/json');
-                  res.end(JSON.stringify(data));
-                } catch (err: any) {
-                  res.statusCode = 500;
-                  res.setHeader('Content-Type', 'application/json');
-                  res.end(JSON.stringify({ error: err.message }));
+                const data = await googleRes.json().catch(() => null);
+                if (!googleRes.ok) {
+                  sendJson(502, {
+                    error: 'gemini_upstream_error',
+                    code: 'gemini_upstream_error',
+                    status: googleRes.status,
+                    message: `Анализ страницы не удался: ${geminiErrorMessage(data, `Gemini API вернул ${googleRes.status}`)}`,
+                  });
+                  return;
                 }
-              });
+
+                sendJson(200, data);
+              } catch (err: any) {
+                sendJson(500, { error: err.message });
+              }
               return;
             }
 
             // 2. TTS Endpoint
             if (req.url?.startsWith('/api/gemini/tts') && req.method === 'POST') {
               if (!geminiApiKey) {
-                res.statusCode = 500;
-                res.setHeader('Content-Type', 'application/json');
-                res.end(JSON.stringify({ error: 'GEMINI_API_KEY is not configured in .env' }));
+                sendJson(500, { error: 'GEMINI_API_KEY is not configured in .env' });
                 return;
               }
 
-              let bodyStr = '';
-              req.on('data', (chunk) => (bodyStr += chunk));
-              req.on('end', async () => {
+              try {
+                const { lines, voiceMap } = await readJsonBody();
+
+                let plan: ReturnType<typeof planTtsRequests>;
                 try {
-                  const { lines, voiceMap } = JSON.parse(bodyStr);
-                  const textInput = (lines || [])
-                    .map((l: any) => `${l.speaker || 'Narrator'}: ${l.text || ''}`)
-                    .join('\n');
-
-                  const speechConfig = Object.entries(voiceMap || {}).map(([speaker, voice]) => ({
-                    speaker,
-                    voiceConfig: { prebuiltVoiceConfig: { voiceName: voice || 'Kore' } },
-                  }));
-
-                  const googleRes = await fetch(
-                    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent?key=${geminiApiKey}`,
-                    {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        contents: [{ parts: [{ text: textInput }] }],
-                        generationConfig: {
-                          responseModalities: ['AUDIO'],
-                          speechConfig:
-                            speechConfig.length > 0
-                              ? { multiSpeakerVoiceConfig: { speakerVoiceConfigs: speechConfig } }
-                              : undefined,
-                        },
-                      }),
-                    }
-                  );
-
-                  const data = await googleRes.json();
-                  res.statusCode = googleRes.status;
-                  res.setHeader('Content-Type', 'application/json');
-                  res.end(JSON.stringify(data));
-                } catch (err: any) {
-                  res.statusCode = 500;
-                  res.setHeader('Content-Type', 'application/json');
-                  res.end(JSON.stringify({ error: err.message }));
+                  plan = planTtsRequests(lines, voiceMap);
+                } catch (error) {
+                  if (error instanceof TtsPlanError) {
+                    sendJson(400, { error: error.code, code: error.code, message: error.message });
+                    return;
+                  }
+                  throw error;
                 }
-              });
+
+                // Чанк = максимум 2 голоса (лимит Gemini 3.8 TTS); порядок
+                // реплик сохраняется, PCM склеивается на клиенте в один WAV.
+                const audioChunks: string[] = [];
+                for (const chunk of plan) {
+                  const googleRes = await fetch(geminiEndpoint(GEMINI_TTS_MODEL), {
+                    method: 'POST',
+                    headers: geminiHeaders(geminiApiKey),
+                    body: JSON.stringify(chunk.body),
+                  });
+
+                  const data = await googleRes.json().catch(() => null);
+                  if (!googleRes.ok) {
+                    sendJson(502, {
+                      error: 'gemini_upstream_error',
+                      code: 'gemini_upstream_error',
+                      status: googleRes.status,
+                      message: `Озвучка не удалась: ${geminiErrorMessage(data, `Gemini API вернул ${googleRes.status}`)}`,
+                    });
+                    return;
+                  }
+
+                  const audio = extractTtsAudio(data);
+                  if (!audio) {
+                    sendJson(502, { error: 'gemini_tts_empty', code: 'gemini_tts_empty', message: 'Gemini вернул ответ без аудио.' });
+                    return;
+                  }
+
+                  audioChunks.push(audio);
+                }
+
+                sendJson(200, buildTtsResponse(mergeTtsAudio(audioChunks)));
+              } catch (err: any) {
+                sendJson(500, { error: err.message });
+              }
               return;
             }
 

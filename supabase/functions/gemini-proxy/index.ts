@@ -1,6 +1,17 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { CryptoError, decryptSecret, secretAad } from "../_shared/crypto.ts";
+import {
+  GEMINI_ANALYZE_MODEL,
+  TtsPlanError,
+  buildTtsResponse,
+  extractTtsAudio,
+  geminiEndpoint,
+  geminiErrorMessage,
+  geminiHeaders,
+  mergeTtsAudio,
+  planTtsRequests,
+} from "../_shared/gemini-tts.ts";
 
 /**
  * gemini-proxy — AI-анализ страниц (/analyze) и озвучка (/tts).
@@ -14,8 +25,13 @@ import { CryptoError, decryptSecret, secretAad } from "../_shared/crypto.ts";
  * а лимиты и биллинг Gemini размазываются по всем аккаунтам сразу. Нет
  * ключа — 403 с кодом `gemini_key_missing`, UI отправляет в /admin/settings.
  *
- * ENV GEMINI_API_KEY осталась только у dev-middleware в vite.config.ts
- * (`npm run dev` без Supabase) — прод-путь её не читает.
+ * Ключ уходит в Gemini заголовком `x-goog-api-key` (см. _shared/gemini-tts.ts):
+ * новые auth-ключи `AQ.…` с `?key=` не работают (404), а старые `AIza…`
+ * работают и так. Формат ключа здесь не проверяется — он опаковый.
+ *
+ * Модели: `gemini-3.8-flash` (vision) и `gemini-3.8-flash-tts` (озвучка).
+ * Форма запроса/ответа TTS — в `_shared/gemini-tts.ts`, он же используется
+ * dev-middleware в vite.config.ts.
  *
  * Запросы:
  *   POST /analyze  { imageBase64, mimeType }
@@ -27,8 +43,6 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
-
-const GEMINI_API = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 function json(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
@@ -109,6 +123,23 @@ async function resolveGeminiKey(
   }
 }
 
+/**
+ * Ошибка Gemini превращается в нормализованный ответ (вместо «200 с телом
+ * error»): клиент читает `code`/`message` и показывает их админу, а не
+ * бесполезное «ошибка сервиса».
+ */
+function upstreamErrorResponse(payload: unknown, status: number, scope: string): Response {
+  return json(
+    {
+      error: 'gemini_upstream_error',
+      code: 'gemini_upstream_error',
+      status,
+      message: `${scope}: ${geminiErrorMessage(payload, `Gemini API вернул ${status}`)}`,
+    },
+    502
+  );
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -153,28 +184,27 @@ serve(async (req) => {
     const promptText = `Ты — анализатор манги. Извлеки все диалоговые облака и закадровый текст со страницы.
 Верни СТРОГО чистый JSON массив без разметки: [{"speaker":"Speaker1","text":"..."}]`;
 
-    const response = await fetch(
-      `${GEMINI_API}/gemini-2.5-flash:generateContent?key=${key.key}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [
-            {
-              parts: [
-                { text: promptText },
-                { inline_data: { mime_type: mimeType || 'image/jpeg', data: imageBase64 } },
-              ],
-            },
-          ],
-        }),
-      }
-    );
-
-    const data = await response.json();
-    return new Response(JSON.stringify(data), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    const response = await fetch(geminiEndpoint(GEMINI_ANALYZE_MODEL), {
+      method: 'POST',
+      headers: geminiHeaders(key.key),
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: promptText },
+              { inlineData: { mimeType: mimeType || 'image/jpeg', data: imageBase64 } },
+            ],
+          },
+        ],
+      }),
     });
+
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      return upstreamErrorResponse(data, response.status, 'Анализ страницы не удался');
+    }
+
+    return json(data, 200);
   }
 
   // 2. TTS Endpoint (Speech Synthesis)
@@ -183,37 +213,55 @@ serve(async (req) => {
     if (!key.ok) return key.response;
 
     const { lines, voiceMap } = await req.json();
-    const textInput = (lines || [])
-      .map((l: any) => `${l.speaker || 'Narrator'}: ${l.text || ''}`)
-      .join('\n');
 
-    const speechConfig = Object.entries(voiceMap || {}).map(([speaker, voice]) => ({
-      speaker,
-      voiceConfig: { prebuiltVoiceConfig: { voiceName: (voice as string) || 'Kore' } },
-    }));
-
-    const response = await fetch(
-      `${GEMINI_API}/gemini-2.5-flash-preview-tts:generateContent?key=${key.key}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: textInput }] }],
-          generationConfig: {
-            responseModalities: ['AUDIO'],
-            speechConfig:
-              speechConfig.length > 0
-                ? { multiSpeakerVoiceConfig: { speakerVoiceConfigs: speechConfig } }
-                : undefined,
-          },
-        }),
+    let plan: ReturnType<typeof planTtsRequests>;
+    try {
+      plan = planTtsRequests(lines, voiceMap);
+    } catch (error) {
+      if (error instanceof TtsPlanError) {
+        return json({ error: error.code, code: error.code, message: error.message }, 400);
       }
-    );
+      throw error;
+    }
 
-    const data = await response.json();
-    return new Response(JSON.stringify(data), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    // Чанк = максимум 2 голоса (лимит Gemini 3.8 TTS). Реплики идут по
+    // порядку, поэтому склейка PCM даёт ту же последовательность, что и один
+    // большой запрос.
+    const audioChunks: string[] = [];
+
+    for (let index = 0; index < plan.length; index++) {
+      const chunk = plan[index];
+      const response = await fetch(geminiEndpoint(GEMINI_TTS_MODEL), {
+        method: 'POST',
+        headers: geminiHeaders(key.key),
+        body: JSON.stringify(chunk.body),
+      });
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        const scope = plan.length > 1
+          ? `Озвучка не удалась (фрагмент ${index + 1} из ${plan.length}, голоса: ${chunk.speakers.join(', ')})`
+          : 'Озвучка не удалась';
+        return upstreamErrorResponse(data, response.status, scope);
+      }
+
+      const audio = extractTtsAudio(data);
+      if (!audio) {
+        return json(
+          {
+            error: 'gemini_tts_empty',
+            code: 'gemini_tts_empty',
+            message: 'Gemini вернул ответ без аудио. Попробуйте ещё раз или замените ключ в /admin/settings.',
+          },
+          502
+        );
+      }
+
+      audioChunks.push(audio);
+    }
+
+    return json(buildTtsResponse(mergeTtsAudio(audioChunks)), 200);
   }
 
   return new Response('Not Found', { status: 404, headers: corsHeaders });

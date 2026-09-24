@@ -122,7 +122,8 @@ export function ApiKeySettings() {
         <CardHeader>
           <CardTitle className="text-base text-white">Ключ Gemini API</CardTitle>
           <CardDescription className="text-xs text-neutral-400">
-            Создать ключ: Google AI Studio → API keys. Формат — <code>AIza…</code>, 39 символов.
+            Создать ключ: Google AI Studio → API keys. Подойдёт и новый auth-ключ
+            (<code>AQ.…</code>, их сейчас и выдаёт AI Studio), и старый <code>AIza…</code>.
           </CardDescription>
         </CardHeader>
 
@@ -145,9 +146,12 @@ export function ApiKeySettings() {
           {connected && status.data?.key && (
             <div className="space-y-1">
               {/* Маска собирается одной строкой: React не вставляет между
-                  текстовыми узлами комментарии, и её видно в SSR-разметке. */}
+                  текстовыми узлами комментарии, и её видно в SSR-разметке.
+                  Префикс НЕ показываем: ключи бывают `AIza…` и `AQ.…`, а
+                  сервер хранит только last4 — рисовать «AIza…» для нового
+                  ключа было бы враньём. */}
               <div className="font-mono text-sm text-neutral-200">
-                {`AIza…••••${status.data.key.last4}`}
+                {`••••••••${status.data.key.last4}`}
               </div>
               <div className="text-xs text-neutral-500">
                 провайдер: {status.data.key.provider}, обновлён{' '}
@@ -178,7 +182,7 @@ export function ApiKeySettings() {
                 disabled={demo || isBusy}
                 value={input}
                 onChange={(event) => setInput(event.target.value)}
-                placeholder={connected ? 'AIza… (замена)' : 'AIza…'}
+                placeholder={connected ? 'AQ.… или AIza… (замена)' : 'AQ.… или AIza…'}
                 className="flex-1 font-mono"
               />
               <Button type="submit" disabled={demo || isBusy || !input.trim()} className="gap-2">
