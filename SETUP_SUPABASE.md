@@ -21,7 +21,7 @@ if (isSupabaseConfigured) { /* реальный Supabase */ }
 | `VITE_SUPABASE_URL` | да | Supabase → Project Settings → API |
 | `VITE_SUPABASE_ANON_KEY` **или** `VITE_SUPABASE_PUBLISHABLE_KEY` | да | там же (anon / publishable key) |
 | `VITE_SUPABASE_PROJECT_ID` | нет | инжектит Lovable |
-| `GEMINI_API_KEY` | для AI-фич | **без** префикса `VITE_` — это секрет |
+| `GEMINI_API_KEY` | только для dev-middleware | **без** префикса `VITE_` — это секрет; в проде ключ у каждого админа свой (см. раздел «Gemini API key на пользователя») |
 
 Lovable при подключении проекта через **More → Cloud → «Already have a Supabase
 project? Connect it here»** инжектит `VITE_SUPABASE_URL`,
@@ -36,8 +36,12 @@ Service-role key в браузер класть нельзя — в `VITE_*` о�
 ```bash
 VITE_SUPABASE_URL=https://<project-ref>.supabase.co
 VITE_SUPABASE_ANON_KEY=<anon или publishable key>
-GEMINI_API_KEY=<ключ Gemini>   # только для AI-анализа и озвучки в dev
+GEMINI_API_KEY=<ключ Gemini>   # только для dev-middleware /api/gemini/* (npm run dev)
 ```
+
+`GEMINI_API_KEY` в `.env` не влияет на прод-путь: edge-функция `gemini-proxy`
+берёт ключ из `public.user_api_keys` — тот, что админ сохранил в
+`/admin/settings`. В браузер эта переменная не попадает.
 
 ## 2. Схема и RLS
 
@@ -63,6 +67,10 @@ GEMINI_API_KEY=<ключ Gemini>   # только для AI-анализа и о
    `latest_login_challenge_status` фильтрует по JWT `session_id`.
    Ноут (S1 approved) и телефон (S2 pending) независимы; новый login =
    новый session_id = снова письмо. **Не** «любой approved навсегда».
+10. `00000000000017_user_api_keys.sql` — `public.user_api_keys`: персональный
+    Gemini API key админа (шифротекст AES-256-GCM + RLS «своя строка и
+    только с ролью admin»). Версии 09–16 в списке не перечислены: файлы
+    накатываются по возрастанию имени, пропуск номера безвреден.
 
 Если накатываете руками — держите файлы в репозитории в том же виде, чтобы
 Lovable не предложил «создать схему заново» и не наплодил дублей таблиц.
@@ -94,21 +102,29 @@ select public.has_role('<uuid-пользователя>', 'admin'); -- долж�
 ## 4. Edge-функция для Gemini
 
 AI-анализ страниц и озвучка идут через `supabase/functions/gemini-proxy`
-(роуты `/analyze` и `/tts`). Lovable деплоит функции сам, если попросить в чате;
-вручную — так:
+(роуты `/analyze` и `/tts`). Ключ Gemini функция берёт из персональной записи
+админа (`public.user_api_keys`, шифротекст AES-256-GCM) — общего
+`GEMINI_API_KEY` в прод-пути больше нет. Lovable деплоит функции сам, если
+попросить в чате; вручную — так:
 
 ```bash
 supabase functions deploy gemini-proxy --project-ref <project-ref>
-supabase secrets set GEMINI_API_KEY=<ключ> --project-ref <project-ref>
+supabase functions deploy admin-api-keys --project-ref <project-ref>
+supabase secrets set USER_KEY_ENC_SECRET="$(openssl rand -base64 32)" --project-ref <project-ref>
 ```
 
-Функция требует валидный `Authorization` (пользователь с ролью `admin`) и
-возвращает 403 всем остальным.
+`admin-api-keys` — CRUD своего ключа (`GET`/`POST`/`DELETE`), вызывается только
+из `/admin/settings`. Обе функции требуют валидный `Authorization` (пользователь
+с ролью `admin`) и возвращают 403 всем остальным. Без сохранённого ключа
+`gemini-proxy` отвечает 403 с кодом `gemini_key_missing`, а UI показывает
+подсказку «добавьте ключ в /admin/settings» (см. раздел «Gemini API key на
+пользователя» ниже).
 
 В `vite.config.ts` есть dev-middleware `/api/gemini/*` — оно работает **только**
-в `npm run dev`. На Lovable Cloud / Vercel этого middleware нет, там нужен
-именно edge function; в `src/data/gemini.ts` функция и так вызывается первой, а
-`/api/gemini/*` — запасной путь.
+в `npm run dev` и использует `GEMINI_API_KEY` из `.env`. На Lovable Cloud /
+Vercel этого middleware нет, там нужен именно edge function; в
+`src/data/gemini.ts` функция вызывается первой, а `/api/gemini/*` — запасной
+путь (ошибки про отсутствующий ключ админа из него в dev-fallback не уходят).
 
 ## 5. Как проверить, что Supabase действительно работает
 
@@ -757,3 +773,65 @@ pdf.js и heic2any загружаются только при обработке
 5. Открыть GIF в читалке и убедиться в анимации. Удалить PDF-страницу/главу: оригинал PDF должен остаться. Проверить Network offline, RLS и квоту на отдельном тестовом проекте.
 
 Результат автоматизированного браузерного прогона текущей реализации — `docs/page-upload-qa.md`.
+
+## Gemini API key на пользователя (admin)
+
+AI-функции (озвучка глав, AI-анализ страниц) работают на **персональном** ключе
+админа. Общего `GEMINI_API_KEY` в прод-пути нет: иначе «свой ключ» ни на что не
+влияет, а лимиты и биллинг Gemini размазываются по всем аккаунтам сразу.
+
+- UI: `/admin/settings` («Настройки» в шапке админки) — статус, замена, удаление.
+- Таблица: `public.user_api_keys` (миграция `00000000000017_user_api_keys.sql`),
+  один ряд на пользователя, RLS «своя строка и только с ролью admin».
+- Хранение: `ciphertext` = base64(AES-256-GCM), `iv` = base64(12 байт),
+  `last4` — единственное, что показывается в UI. Плейнтекст в базу не попадает,
+  из UI/PostgREST ключ обратно не читается, в логи не пишется.
+- Ключ шифрования: Edge Secret `USER_KEY_ENC_SECRET` (base64 от 32 байт).
+  Вместе с AAD `user_api_keys:<user_id>:<provider>` он ещё и не даёт перенести
+  шифротекст в чужую строку.
+
+### Первый деплой
+
+```bash
+# 1. Секрет шифрования — один раз на проект. Потеря секрета = потеря ключей.
+openssl rand -base64 32
+supabase secrets set USER_KEY_ENC_SECRET="<значение>" --project-ref <project-ref>
+
+# 2. Миграция (или supabase db reset для локальной базы)
+supabase db push --project-ref <project-ref>
+
+# 3. Функции
+supabase functions deploy admin-api-keys --project-ref <project-ref>
+supabase functions deploy gemini-proxy --project-ref <project-ref>
+```
+
+После деплоя каждый админ заходит в `/admin/settings`, вставляет свой ключ из
+[Google AI Studio](https://aistudio.google.com/app/apikey) (`AIza…`, 39 символов)
+и получает статус «подключён». Пока ключа нет, `gemini-proxy` отвечает
+403 `gemini_key_missing`, а страница настроек показывает баннер.
+
+### Ротация USER_KEY_ENC_SECRET
+
+Смена секрета делает все сохранённые ключи нечитаемыми (AES-GCM без секрета не
+расшифровывается никак):
+
+1. Предупредите админов: после ротации у всех статус «не задан».
+2. Сгенерируйте новый секрет и обновите его в Supabase:
+   `supabase secrets set USER_KEY_ENC_SECRET="$(openssl rand -base64 32)"`.
+3. Удалите мёртвые записи: `delete from public.user_api_keys;`
+   (именно delete — ряды с пустыми `ciphertext`/`iv` остались бы «подключёнными»
+   в UI и давали бы `gemini_key_unreadable` вместо понятного «ключ не задан»).
+4. Попросите админов залить ключи заново через `/admin/settings`.
+
+Секрет не версионируется, не хранится в репозитории и не логируется.
+
+### Если что-то не работает
+
+| Симптом | Причина и что делать |
+| --- | --- |
+| На странице настроек `db_error` про отсутствующую таблицу | Миграция `00000000000017_user_api_keys.sql` не применена. `supabase db push` |
+| `enc_secret_missing` / `enc_secret_invalid` при сохранении | Edge Secret `USER_KEY_ENC_SECRET` не задан или это не base64 от 32 байт. Сгенерируйте заново: `openssl rand -base64 32` |
+| `gemini_key_unreadable` при озвучке | Секрет сменили, а старые записи остались. Ротация выше (п. 3–4) |
+| Озвучка падает с «Gemini API key не задан» | У текущего админа нет своего ключа: `/admin/settings` |
+| Google отвечает 400/403 в теле ответа | Ключ сохранён, но отклонён самим Gemini (неверный/просроченный/без доступа к модели). Замените ключ |
+| Ошибки `admin-api-keys` 404 | Функция не задеплоена: `supabase functions deploy admin-api-keys` |

@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { Link, useRouterState } from '@tanstack/react-router';
-import { Library, Tag, ArrowLeft, LogOut, Inbox, Megaphone } from 'lucide-react';
+import { Library, Tag, ArrowLeft, LogOut, Inbox, Megaphone, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { auth } from '@/data/auth';
 import { adminRequests } from '@/data/adminRequests';
@@ -100,6 +100,18 @@ export function AdminHeader() {
                   {pendingCount > 99 ? '99+' : pendingCount}
                 </span>
               )}
+            </Link>
+            {/* Доступно всем админам: у каждого свой Gemini API key. */}
+            <Link
+              to="/admin/settings"
+              className="flex items-center gap-2 rounded-lg px-3 py-1.5 text-neutral-400 hover:bg-neutral-800 hover:text-white transition-colors"
+              activeProps={{
+                className:
+                  'bg-rose-950/50 text-rose-400 font-medium border border-rose-900/50',
+              }}
+            >
+              <Settings className="h-4 w-4" />
+              Настройки
             </Link>
             {isOwner && (
               <Link
