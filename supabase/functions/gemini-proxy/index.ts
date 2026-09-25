@@ -33,9 +33,9 @@ import {
  * Форма запроса/ответа TTS — в `_shared/gemini-tts.ts`, он же используется
  * dev-middleware в vite.config.ts.
  *
- * Запросы:
- *   POST /analyze  { imageBase64, mimeType }
- *   POST /tts      { lines, voiceMap }
+ * Запросы (одна функция, действие — полем в теле; сабпасы в URL давали 404):
+ *   POST { action: 'analyze', imageBase64, mimeType }
+ *   POST { action: 'tts', lines, voiceMap }
  */
 
 const corsHeaders = {
@@ -170,17 +170,22 @@ serve(async (req) => {
     return json({ error: 'forbidden' }, 403);
   }
 
-  const url = new URL(req.url);
-  const pathname = url.pathname;
-  const isAnalyze = pathname === '/analyze' || pathname === '/functions/v1/gemini-proxy/analyze';
-  const isTts = pathname === '/tts' || pathname === '/functions/v1/gemini-proxy/tts';
+  // Действие берём из ТЕЛА запроса, а не из пути: supabase-js собирает URL
+  // как /functions/v1/<имя функции>, поэтому вызов `gemini-proxy/analyze`
+  // превращался в /functions/v1/gemini-proxy/analyze — шлюз Supabase трактует
+  // это как функцию с именем «gemini-proxy/analyze» и отдаёт 404 ещё до нашей
+  // функции. Формат: { action: 'analyze' | 'tts', ...остальные поля }.
+  const body = await req.json().catch(() => ({}));
+  const { action, ...payload } = body;
+  const isAnalyze = action === 'analyze';
+  const isTts = action === 'tts';
 
   // 1. Analyze Endpoint (Vision)
   if (req.method === 'POST' && isAnalyze) {
     const key = await resolveGeminiKey(supabase, user.id);
     if (!key.ok) return key.response;
 
-    const { imageBase64, mimeType } = await req.json();
+    const { imageBase64, mimeType } = payload;
     const promptText = `Ты — анализатор манги. Извлеки все диалоговые облака и закадровый текст со страницы.
 Верни СТРОГО чистый JSON массив без разметки: [{"speaker":"Speaker1","text":"..."}]`;
 
@@ -212,7 +217,7 @@ serve(async (req) => {
     const key = await resolveGeminiKey(supabase, user.id);
     if (!key.ok) return key.response;
 
-    const { lines, voiceMap } = await req.json();
+    const { lines, voiceMap } = payload;
 
     let plan: ReturnType<typeof planTtsRequests>;
     try {

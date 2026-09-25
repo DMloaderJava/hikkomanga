@@ -4,6 +4,8 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { Analytics } from '@vercel/analytics/react';
 import { Header } from '@/components/layout/Header';
 import { Footer } from '@/components/layout/Footer';
+import { SupportChatProvider } from '@/components/support/SupportChatContext';
+import { SupportChatSidebar } from '@/components/support/SupportChatSidebar';
 import { Button } from '@/components/ui/button';
 import { AlertTriangle, Home } from 'lucide-react';
 import { setNoindex } from '@/lib/seo';
@@ -54,7 +56,14 @@ function RootComponent() {
       <div className="min-h-screen bg-[#140e12] text-neutral-100 flex flex-col font-sans selection:bg-rose-600 selection:text-white antialiased">
         {!isAdminRoute && !isReaderRoute && <Header />}
         <div className="flex-1">
-          <Outlet />
+          {/* Support-чат: провайдер состояния + сайдбар вокруг страницы.
+              Раскладка чата подгружается динамически при первом открытии —
+              см. SupportChatSidebar. */}
+          <SupportChatProvider>
+            <SupportChatSidebar>
+              <Outlet />
+            </SupportChatSidebar>
+          </SupportChatProvider>
         </div>
         {!isAdminRoute && !isReaderRoute && <Footer />}
         {/* Vercel Web Analytics — pageviews на всех маршрутах (вкл. admin/reader).

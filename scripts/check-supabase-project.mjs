@@ -13,10 +13,12 @@
  *   4. RPC Login Guard и has_role;
  *   5. бакеты storage: manga, hikko-originals, voiceovers;
  *   6. Edge Functions login-notify / login-confirm / gemini-proxy /
- *      admin-api-keys:
+ *      dialog-tts / chat / admin-api-keys:
  *      401 без Authorization ⇒ задеплоена (шлюз), 404 ⇒ нет;
  *      400 на login-confirm с валидным ключом ⇒ код функции работает;
- *      401 на gemini-* с публичным ключом ⇒ функция жива и закрыта админом;
+ *      401 на gemini-*, dialog-tts и chat с публичным ключом ⇒ функция жива,
+ *      задеплоена и отвечает своим телом `unauthorized` (verify_jwt = false
+ *      в supabase/config.toml — иначе шлюз вернул бы 401 с пустым телом);
  *   7. настройки Auth: открытая регистрация, авто-подтверждение почты.
  *
  * Окружение читается так же, как сборкой (`loadEnv` + process.env), поэтому
@@ -298,6 +300,8 @@ const FUNCTION_CHECKS = [
   // именно факт деплоя — без него «Supabase недоступен» на /admin/settings
   // пришлось бы ловить в браузере.
   ['gemini-proxy', 401, 'unauthorized'],
+  ['dialog-tts', 401, 'unauthorized'],
+  ['chat', 401, 'unauthorized'],
   ['admin-api-keys', 401, 'unauthorized'],
 ];
 for (const [fn, expectStatus, expectBody] of FUNCTION_CHECKS) {

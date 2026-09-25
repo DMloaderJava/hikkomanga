@@ -1,15 +1,21 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useContext, useEffect, useState, useCallback, useRef } from 'react';
 import { Link, useRouterState } from '@tanstack/react-router';
-import { Library, Tag, ArrowLeft, LogOut, Inbox, Megaphone, Settings } from 'lucide-react';
+import { Library, Tag, ArrowLeft, LogOut, Inbox, Megaphone, Settings, MessageCircle } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { auth } from '@/data/auth';
 import { adminRequests } from '@/data/adminRequests';
+import { SupportChatContext } from '@/components/support/SupportChatContext';
 
 export function AdminHeader() {
   const [pendingCount, setPendingCount] = useState<number | null>(null);
   const [isOwner, setIsOwner] = useState(false);
   const ownerKnown = useRef(false);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
+
+  // Через контекст, а не через useSupportChat(): хедер переиспользуется в
+  // тестах/страницах без провайдера, и бросать исключение из-за кнопки чата
+  // там не за что — кнопка просто ничего не делает.
+  const support = useContext(SupportChatContext);
 
   const refreshPending = useCallback(async () => {
     try {
@@ -130,6 +136,17 @@ export function AdminHeader() {
         </div>
 
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => support?.toggle()}
+            title="Чат поддержки"
+            aria-label="Чат поддержки"
+            aria-pressed={support?.open ?? false}
+            className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-neutral-800 hover:text-white"
+          >
+            <MessageCircle className="h-4 w-4" />
+          </button>
+
           <Button
             variant="ghost"
             size="sm"
