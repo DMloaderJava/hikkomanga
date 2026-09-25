@@ -1,0 +1,50 @@
+# Конфигурация Supabase CLI: читается `supabase functions deploy`.
+#
+# Зачем файл: без него CLI выставляет каждой функции verify_jwt = true, и
+# деплой без флага --no-verify-jwt молча ломал публичные функции — шлюз отдавал
+# 401 раньше, чем выполнялся код функции. Здесь зафиксировано то, что раньше
+# приходилось передавать флагом вручную, плюс функции, которые разбирают
+# Authorization сами. Флаг --no-verify-jwt по-прежнему работает и перекрывает
+# значение из файла, но помнить о нём при каждом деплое больше не нужно.
+#
+# Проверяется чекером `npm run check:supabase` (раздел «Edge Functions»): он
+# ждёт от каждой функции конкретный HTTP-код без Authorization и с публичным
+# ключом, поэтому рассинхрон config.toml и кода видно сразу.
+
+project_id = "islgkqdsztchzajnulof"
+
+# ── Публичные функции (анонимные заявки) ────────────────────────────────────
+# JWT у заявителя нет: вход проверяется внутри функции — капча, rate-limit по
+# IP, валидация payload. Раньше это же значение передавалось флагом
+# `--no-verify-jwt` (см. DEPLOY.md).
+
+[functions.submit-title]
+verify_jwt = false
+
+[functions.get-submission]
+verify_jwt = false
+
+[functions.submit-chapters]
+verify_jwt = false
+
+# ── Функции под сессией пользователя ───────────────────────────────────────
+# Клиент шлёт JWT пользователя, а функция проверяет его сама
+# (`auth.getUser()` + `has_role(…, 'admin')` для AI-функций). verify_jwt = false
+# нужен ради КОНТРАКТА ОШИБОК: платформенная проверка отдаёт свой 401 с пустым
+# телом, и клиент не увидит `unauthorized` / `forbidden` / `gemini_key_missing`,
+# на которые завязан UI (кнопка «Добавьте ключ: /admin/settings»).
+
+[functions.gemini-proxy]
+verify_jwt = false
+
+[functions.dialog-tts]
+verify_jwt = false
+
+[functions.chat]
+verify_jwt = false
+
+# ── Остальные — со значением по умолчанию (verify_jwt = true) ───────────────
+# admin-api-keys, notify-submitter, finalize-chapter-submission — админ из
+# браузера, JWT проверяет шлюз. login-notify / login-confirm — Auth Hook
+# (Login Guard), их отдельно в файле не фиксируем: поведение то же, что и без
+# config.toml (деплой без флага).

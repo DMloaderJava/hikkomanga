@@ -121,17 +121,29 @@ select public.has_role('<uuid-пользователя>', 'admin'); -- долж�
 
 ## 4. Edge-функция для Gemini
 
-AI-анализ страниц и озвучка идут через `supabase/functions/gemini-proxy`
-(роуты `/analyze` и `/tts`). Ключ Gemini функция берёт из персональной записи
-админа (`public.user_api_keys`, шифротекст AES-256-GCM) — общего
-`GEMINI_API_KEY` в прод-пути больше нет. Lovable деплоит функции сам, если
-попросить в чате; вручную — так:
+AI-анализ страниц и озвучка идут через `supabase/functions/gemini-proxy`.
+Действие выбирается **полем в теле**, а не путём:
+`POST { action: 'analyze', imageBase64, mimeType }` и
+`POST { action: 'tts', lines, voiceMap }`. Так было не всегда: раньше клиент
+звал `gemini-proxy/analyze`, supabase-js собирал из этого URL
+`/functions/v1/gemini-proxy/analyze`, и шлюз отвечал 404 («функции с таким
+именем нет») ещё до нашего кода. Ключ Gemini функция берёт из персональной
+записи админа (`public.user_api_keys`, шифротекст AES-256-GCM) — общего
+`GEMINI_API_KEY` в прод-пути больше нет. Вручную — так:
 
 ```bash
-supabase functions deploy gemini-proxy --project-ref <project-ref>
+supabase functions deploy gemini-proxy --project-ref <project-ref>   # анализ + озвучка страниц
+supabase functions deploy dialog-tts   --project-ref <project-ref>   # озвучка диалога → WAV
+supabase functions deploy chat         --project-ref <project-ref>   # support-чат (SSE)
 supabase functions deploy admin-api-keys --project-ref <project-ref>
 supabase secrets set USER_KEY_ENC_SECRET="$(openssl rand -base64 32)" --project-ref <project-ref>
 ```
+
+`verify_jwt` у этих функций задан в `supabase/config.toml` (файл появился
+вместе с миграцией 17): `false` — потому что вход они проверяют сами, и
+ответы с кодами `unauthorized` / `gemini_key_missing` должны доходить до
+клиента целиком. Подробности по `dialog-tts` и `chat` — в разделе
+«Support-чат и озвучка диалогов» в конце файла.
 
 `admin-api-keys` — CRUD своего ключа (`GET`/`POST`/`DELETE`), вызывается только
 из `/admin/settings`. Обе функции требуют валидный `Authorization` (пользователь
@@ -898,3 +910,65 @@ supabase functions deploy gemini-proxy --project-ref <project-ref>
 | Озвучка: `tts_too_many_requests` | В главе больше 16 персонажей (8 запросов × 2 голоса — потолок Gemini 3.8 TTS). Сократите число говорящих или озвучьте главу по частям |
 | Озвучка: `tts_no_lines` | В сценарии нет непустых реплик — сначала прогоните анализ страниц или заполните текст в редакторе реплик |
 | Ошибки `admin-api-keys` 404 | Функция не задеплоена: `supabase functions deploy admin-api-keys` |
+| «Чат недоступен: edge-функция chat не ответила» | Функция `chat` не задеплоена (404) или в проекте нет ни одного сохранённого Gemini-ключа. Проверка: `npm run check:supabase` (раздел Edge Functions) |
+| Чат отвечает 403 `Ассистент поддержки не настроен` | Ни у владельца, ни у админов нет ключа в `/admin/settings` — фолбэк «свой → owner → админ» ничего не нашёл |
+| Озвучка диалога: 400 «Слишком много реплик (макс. 40)» | В режиме 3+ спикеров каждая реплика — отдельный запрос, 40 — предел edge-функции по времени. Разбейте главу |
+| Озвучка диалога: 400 «Слишком много спикеров (макс. 8)» | Голосов в prebuilt-списке восемь — больше восьми разных спикеров озвучить нечем |
+
+## Support-чат и озвучка диалогов (edge-функции `chat` и `dialog-tts`)
+
+Обе функции добавлены вместе с миграцией 17 и работают на тех же
+персональных Gemini-ключах, что и `gemini-proxy` (`public.user_api_keys`,
+AES-256-GCM, Edge Secret `USER_KEY_ENC_SECRET`). Обе — `verify_jwt = false`
+в `supabase/config.toml` и проверяют вход сами, чтобы отдавать свои коды
+ошибок.
+
+### `chat` — support-чат в боковой панели
+
+- `POST { messages: [{ role: 'user' | 'assistant', content }] }` → `200
+  text/event-stream` (SSE Gemini проксируется как есть, ответ печатается
+  по мере поступления).
+- Роль `admin` **не** требуется — только авторизация: 401 `unauthorized`,
+  если нет пользовательской сессии.
+- Ключ ищется по цепочке **свой → владельца проекта → первого админа с
+  ключом** (читателю свой ключ завести негде). Ничего не нашли — 403
+  `{"error":"gemini_key_missing","message":"Обратитесь к администратору"}`.
+- Модель одна и зашита константой `MODEL_ID = 'gemini-2.5-flash'` в
+  `supabase/functions/chat/index.ts`: селектора моделей в UI нет и не будет.
+  `thinkingConfig.thinkingBudget = 0` (быстрый ответ поддержки); если модель
+  не принимает 0, функция один раз повторяет запрос с `1`.
+- Клиент — `src/data/chat.ts` (`streamChat` + `parseGeminiSSE`), UI —
+  `src/components/support/SupportChat.tsx` (`SupportChatSidebar` вокруг
+  `<Outlet />` в корневом layout, кнопка с иконкой MessageCircle в
+  `AdminHeader`). На экранах < 768px панель открывается шторкой.
+- Проверка: `npm run check:supabase` должен показать `chat` задеплоенной
+  (401 `unauthorized` с публичным ключом), вручную —
+  `curl` тем же форматом, что и в разделе про Login Guard.
+- UI-проверка без браузера и сети (jsdom, разовая зависимость):
+  `npm i --no-save jsdom && npm run test:support-chat` — открытие панели,
+  стрим, «Стоп», картинка, озвучка и мобильная шторка.
+
+### `dialog-tts` — озвучка расшифровки диалога в один WAV
+
+- `POST { transcript: "Speaker 1: …\nSpeaker 2: …", voices: { "1": "Kore" } }`
+  → `200 audio/wav` (не стрим: файл целиком, клиент играет его из `blob:`).
+- Доступ только админам (401 `unauthorized` / 403 `forbidden`); ключ — свой,
+  без фолбэка на owner: 403 `gemini_key_missing` + «Добавьте ключ:
+  /admin/settings».
+- Ошибки входа — 400 с текстом: «Текст пуст», «Не найдено реплик», «Слишком
+  много спикеров (макс. 8)», «Слишком много реплик (макс. 40)». Google 429 →
+  429 «Слишком много запросов, попробуйте позже», другие 4xx → 400 «Не удалось
+  озвучить текст», всё остальное → 500 «Озвучка не удалась».
+- Логика (разбор `Speaker N:`, круговой выбор голосов, план запросов, склейка
+  WAV, паузы 220 мс, нормализация RIFF) живёт в
+  `supabase/functions/_shared/gemini-tts.ts` — там же, где чанковая озвучка
+  глав, поэтому прод и тесты (`node scripts/unit-dialog-tts.mjs`) гоняют одну
+  и ту же копию.
+- Режимы: 1 спикер — один запрос с одним голосом; 2 — один запрос с
+  `multiSpeakerVoiceConfig` (`Speaker 1`/`Speaker 2`); 3+ — по запросу на
+  реплику, строго последовательно (параллельные запросы на одном ключе
+  упираются в 429), на выходе один WAV с паузами между репликами.
+- Клиент — `src/data/dialogTts.ts` (`synthesizeDialog` → `Blob`,
+  `DIALOG_TTS_ERROR_MESSAGES`). Вызов идёт обычным `fetch`, а не
+  `supabase.functions.invoke`: обёртка разбирает ответ по `Content-Type`, а
+  `audio/wav` для неё «неизвестный тип» — она декодировала бы байты как текст.

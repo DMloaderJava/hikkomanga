@@ -99,15 +99,18 @@ supabase secrets set \
 ### 3. Деплой edge-функций
 
 ```bash
-# Публичные: клиент шлёт только apikey, JWT нет. Флаг --no-verify-jwt
-# ОБЯЗАТЕЛЕН: supabase/config.toml в репозитории нет, поэтому деплой без флага
-# выставит verify_jwt=true и анонимные заявки отвалятся на 401.
-supabase functions deploy submit-title --no-verify-jwt
-supabase functions deploy get-submission --no-verify-jwt
-supabase functions deploy submit-chapters --no-verify-jwt
+# Публичные (заявки без JWT) и функции под сессией: какие именно значения
+# verify_jwt нужны каждой функции, зафиксировано в supabase/config.toml,
+# поэтому флаги больше не нужны — CLI читает файл. Флаг --no-verify-jwt
+# по-прежнему перекрывает значение из config.toml, но помнить о нём не надо.
+supabase functions deploy submit-title
+supabase functions deploy get-submission
+supabase functions deploy submit-chapters
 
-# Под сессией админа (JWT проверяет шлюз):
-supabase functions deploy gemini-proxy               # AI-анализ и озвучка
+# Под сессией (JWT проверяет сама функция — см. config.toml):
+supabase functions deploy gemini-proxy               # AI-анализ и озвучка страниц
+supabase functions deploy dialog-tts                 # озвучка диалога (Speaker N: …) → WAV
+supabase functions deploy chat                       # support-чат в боковой панели (SSE)
 supabase functions deploy admin-api-keys             # /admin/settings: свой Gemini key
 supabase functions deploy notify-submitter           # письмо заявителю о решении
 supabase functions deploy finalize-chapter-submission # перенос глав при approve
@@ -117,12 +120,20 @@ supabase functions deploy login-notify
 supabase functions deploy login-confirm
 ```
 
+> `supabase/config.toml` в репозитории есть с миграции 17 (2026-09). Раньше его
+> не было, и публичные функции деплоились только с флагом `--no-verify-jwt` —
+> без флага шлюз отдавал 401 ещё до кода функции. Если правите деплой-скрипты,
+> сверяйтесь с файлом, а не с этой шпаргалкой: истина по `verify_jwt` — в нём.
+
 `submit-title` / `submit-chapters` — публичные: rate-limit по
 `sha256(ip + RATE_LIMIT_SALT)` → капча → валидация → upload в бакет
 `submissions` под `service_role` → INSERT в `admin_requests`. Запись анонима
 напрямую в таблицу закрыта RLS («no anon insert»).
-`gemini-proxy` / `admin-api-keys` работают на **персональном** ключе админа из
-`user_api_keys` (общего `GEMINI_API_KEY` в прод-пути нет).
+`gemini-proxy` / `dialog-tts` / `admin-api-keys` работают на **персональном**
+ключе админа из `user_api_keys` (общего `GEMINI_API_KEY` в прод-пути нет).
+`chat` берёт ключ так: свой → ключ владельца проекта → ключ первого админа,
+у которого он сохранён (читателю свой ключ завести негде, но чат ему нужен);
+роль admin для чата не требуется, только авторизация.
 
 ### 4. Vercel env + Redeploy
 
@@ -174,8 +185,9 @@ SUPABASE_SERVICE_ROLE_KEY=... npm run check:submissions
 ```
 
 `npm run check:supabase` печатает таблицы (включая `user_api_keys`), RPC, бакеты
-и деплой функций (`login-*`, `gemini-proxy`, `admin-api-keys`): 404 = функция не
-задеплоена.
+и деплой функций (`login-*`, `gemini-proxy`, `dialog-tts`, `chat`,
+`admin-api-keys`): 404 = функция не задеплоена, 401 с нашим телом
+`unauthorized` = задеплоена и закрыта.
 
 Smoke без браузера (ключ publishable публичный):
 
@@ -214,11 +226,14 @@ Vercel поднимет предыдущую сборку. Миграции от
 - Бакет `hikko-originals` из `00000000000002_storage_buckets.sql` на проекте
   отсутствует (`npm run check:supabase` показывает ✗) — файл накатывался руками
   до правок, нужно выполнить его `insert into storage.buckets …` отдельно.
-- `supabase/config.toml` в репозитории нет, поэтому `verify_jwt` задаётся только
-  флагом деплоя: публичные функции (`submit-title`, `get-submission`,
-  `submit-chapters`) обязаны выкладываться с `--no-verify-jwt`. Проверка:
-  анонимный POST без `Authorization` отвечает 400 (ок) или 401 (verify_jwt
-  включился, заявки сломаны).
+- `verify_jwt` для каждой функции зафиксирован в `supabase/config.toml`
+  (раньше файла не было, и значение задавалось только флагом деплоя).
+  Публичные (`submit-title`, `get-submission`, `submit-chapters`) — `false`,
+  AI-функции под сессией (`gemini-proxy`, `dialog-tts`, `chat`) — тоже `false`,
+  потому что вход они проверяют сами и должны отдавать свои коды ошибок.
+  Проверка: анонимный POST без `Authorization` отвечает 400 (ок) или 401
+  (verify_jwt включился, заявки сломаны); `npm run check:supabase` показывает
+  и то, и другое по всем функциям сразу.
 - Edge-функции **не** покрыты `npm run typecheck` (`tsconfig.json` → `include: ["src"]`),
   поэтому ошибки вроде вызова RPC с чужим именем параметра ловятся только
   вызовом функции. После деплоя всегда проверяйте её вызовом (см. раздел 7).

@@ -60,6 +60,36 @@ function edgeErrorFrom(body: EdgeErrorBody | null): Error | null {
   return null;
 }
 
+/**
+ * Ошибка вызова в проде, когда edge-функция не ответила разобранным телом
+ * (`edgeErrorFrom` вернул null): сеть, 404 «функция не задеплоена», не-JSON.
+ *
+ * В проде пробрасывать дальше `devProxyError` нельзя — dev-middleware
+ * `/api/gemini/*` есть только в `npm run dev`, и админ получал «ошибка
+ * сервиса» вместо реальной причины. Здесь собираем текст из того, что есть:
+ * тело ответа Supabase, статус, сообщение сети.
+ */
+async function productionEdgeError(thrown: unknown, scope: string): Promise<Error> {
+  const body = await readEdgeError(thrown);
+  const message = (body?.message ?? body?.error ?? '').trim();
+  if (message) return new Error(message);
+
+  const context = (thrown as { context?: Response } | null)?.context;
+  if (context) {
+    return new Error(
+      `${scope}: edge-функция gemini-proxy ответила HTTP ${context.status}. ` +
+        'Подробности — в логах функции (Supabase → Edge Functions).'
+    );
+  }
+
+  const fallback = thrown instanceof Error ? thrown.message.trim() : '';
+  return new Error(
+    fallback
+      ? `${scope}: ${fallback}`
+      : `${scope}: edge-функция gemini-proxy недоступна. Проверьте, что она задеплоена: supabase functions deploy gemini-proxy.`
+  );
+}
+
 /** Ошибка dev-proxy `/api/gemini/*`: читаем { message } из тела, если оно есть. */
 async function devProxyError(scope: string, res: Response): Promise<Error> {
   const body = await res.json().catch(() => null);
@@ -158,20 +188,30 @@ export const gemini = {
     // 1. Primary: Try Supabase Edge Function invocation
     if (isSupabaseConfigured) {
       let edgeError: Error | null = null;
+      let thrown: unknown = null;
       try {
         const supabase = await getSupabase();
-        const { data, error } = await supabase.functions.invoke('gemini-proxy/analyze', {
-          body: { imageBase64, mimeType },
+        // Действие — полем в теле: сабпас в имени функции
+        // (`gemini-proxy/analyze`) превращается в URL
+        // /functions/v1/gemini-proxy/analyze, и шлюз Supabase отдаёт 404.
+        const { data, error } = await supabase.functions.invoke('gemini-proxy', {
+          body: { action: 'analyze', imageBase64, mimeType },
         });
 
         if (!error && data) {
           return parseGeminiResponse(data, pageIndex);
         }
 
+        thrown = error;
         edgeError = edgeErrorFrom(error ? await readEdgeError(error) : null);
-      } catch {
-        // Сеть/шлюз: ниже пробуем dev-middleware — в проде его нет, и тогда
-        // администратор получит понятную подсказку про деплой (devProxyError).
+      } catch (error) {
+        thrown = error;
+      }
+
+      if (import.meta.env.PROD) {
+        // Прод: dev-middleware `/api/gemini/*` здесь не существует, поэтому
+        // наружу идёт реальный текст от Supabase (или причина сети/деплоя).
+        throw edgeError ?? (await productionEdgeError(thrown, 'Ошибка сервиса анализа Gemini'));
       }
 
       if (edgeError) throw edgeError;
@@ -212,19 +252,26 @@ export const gemini = {
     //    склеивается в один PCM уже внутри gemini-proxy — форма ответа та же.
     if (isSupabaseConfigured) {
       let edgeError: Error | null = null;
+      let thrown: unknown = null;
       try {
         const supabase = await getSupabase();
-        const { data, error } = await supabase.functions.invoke('gemini-proxy/tts', {
-          body: { lines, voiceMap },
+        // Как и в анализе: действие — в теле, без сабпаса в URL.
+        const { data, error } = await supabase.functions.invoke('gemini-proxy', {
+          body: { action: 'tts', lines, voiceMap },
         });
 
         if (!error && data?.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) {
           responseAudioBase64 = data.candidates[0].content.parts[0].inlineData.data;
         }
 
+        thrown = error;
         edgeError = edgeErrorFrom(error ? await readEdgeError(error) : null);
-      } catch {
-        // Сеть/шлюз: ниже пробуем dev-middleware.
+      } catch (error) {
+        thrown = error;
+      }
+
+      if (import.meta.env.PROD) {
+        throw edgeError ?? (await productionEdgeError(thrown, 'Ошибка сервиса Gemini TTS'));
       }
 
       if (edgeError) throw edgeError;
