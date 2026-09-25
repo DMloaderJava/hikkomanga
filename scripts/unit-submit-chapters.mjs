@@ -38,8 +38,11 @@ const { forceDemoMode, DEMO_SERVER_OPTIONS } = await import('./lib/demo-mode.mjs
 forceDemoMode();
 
 const { createServer } = await import('vite');
+const { fileURLToPath } = await import('node:url');
 const vite = await createServer({
-  root: new URL('..', import.meta.url).pathname,
+  // fileURLToPath, а не URL.pathname: на Windows `.pathname` даёт '/D:/…',
+  // и Vite делает из этого несуществующий 'D:\D:\…' → ENOENT при mkdir .vite.
+  root: fileURLToPath(new URL('..', import.meta.url)),
   ...DEMO_SERVER_OPTIONS,
 });
 

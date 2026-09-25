@@ -98,6 +98,7 @@ const EXPECTED_TABLES = [
   ['admin_requests', '00000000000004_roles_and_requests.sql'],
   ['rate_limit_log', '00000000000005_rate_limit_log.sql'],
   ['ads', '00000000000006_ads.sql'],
+  ['user_api_keys', '00000000000017_user_api_keys.sql'],
 ];
 
 /** RPC → [тело запроса, допустимые статусы, файл миграции]. */

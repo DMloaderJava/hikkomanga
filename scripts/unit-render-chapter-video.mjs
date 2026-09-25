@@ -261,9 +261,16 @@ test('runFfmpeg can be exercised with a mocked child process', async () => {
 });
 
 test('concat demuxer input escapes paths and preserves chapter order', () => {
-  const list = buildConcatFile(['/tmp/one.mp4', "/tmp/two's.mp4"]);
-  assert.match(list, /file '\/tmp\/one\.mp4'/);
-  assert.match(list, /two'\\''s\.mp4/);
+  // Конкатенатор сам резолвит переданные пути в абсолютные и нормализует их
+  // в прямые слэши, поэтому ожидать конкретный корень (/tmp) нельзя: на Windows
+  // это диск текущего проекта. Проверяем форму строк `file '…'`, порядок глав
+  // и экранирование кавычки в имени файла.
+  const first = path.resolve('one.mp4');
+  const second = path.resolve("two's.mp4");
+  const list = buildConcatFile([first, second]);
+  const [line1, line2] = list.trim().split('\n');
+  assert.match(line1, /^file '.*one\.mp4'$/);
+  assert.match(line2, /two'\\''s\.mp4/);
 });
 
 test('multi-chapter concat falls back to a re-encode when stream copy fails', async () => {

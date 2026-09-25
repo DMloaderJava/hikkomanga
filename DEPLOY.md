@@ -27,6 +27,12 @@ SQL Editor → выполнить по порядку:
 - `supabase/migrations/00000000000012_rate_limit_ip.sql`
 - `supabase/migrations/00000000000013_submissions_cleanup.sql`
 - `supabase/migrations/00000000000014_new_title_trigger.sql`
+- `supabase/migrations/00000000000015_chapter_submissions.sql` (заявки на главы)
+- `supabase/migrations/00000000000017_user_api_keys.sql` (персональные Gemini-ключи)
+
+Отдельно, если `npm run check:supabase` показывает ✗ у бакета: выполнить
+`insert` из `00000000000002_storage_buckets.sql` (создаёт `manga` и
+`hikko-originals` с политиками).
 
 Или через CLI (по одному файлу):
 
@@ -36,6 +42,8 @@ supabase db query --linked -f supabase/migrations/00000000000011_requests_rls_an
 supabase db query --linked -f supabase/migrations/00000000000012_rate_limit_ip.sql
 supabase db query --linked -f supabase/migrations/00000000000013_submissions_cleanup.sql
 supabase db query --linked -f supabase/migrations/00000000000014_new_title_trigger.sql
+supabase db query --linked -f supabase/migrations/00000000000015_chapter_submissions.sql
+supabase db query --linked -f supabase/migrations/00000000000017_user_api_keys.sql
 ```
 
 > ⚠️ **`supabase db push` на этом проекте не работает.** Локальная история
@@ -66,15 +74,21 @@ where proname in ('check_ip_rate_limit','cleanup_ip_rate_limit','cleanup_rejecte
 ```bash
 supabase secrets set \
   RATE_LIMIT_SALT="$(openssl rand -hex 32)" \
-  CAPTCHA_PROVIDER=turnstile \
-  TURNSTILE_SECRET_KEY="0x..."
+  CAPTCHA_PROVIDER=recaptcha \
+  RECAPTCHA_SECRET_KEY="<secret key того же виджета>" \
+  USER_KEY_ENC_SECRET="$(openssl rand -base64 32)"
 ```
 
-Для hCaptcha вместо Turnstile:
-
-```bash
-supabase secrets set CAPTCHA_PROVIDER=hcaptcha HCAPTCHA_SECRET_KEY="0x..."
-```
+- Капча: провайдер должен совпадать с site key, зашитым в сборку
+  (`.env.production` → `VITE_CAPTCHA_PROVIDER=recaptcha`). Альтернативы:
+  `CAPTCHA_PROVIDER=turnstile TURNSTILE_SECRET_KEY=0x...` или
+  `CAPTCHA_PROVIDER=hcaptcha HCAPTCHA_SECRET_KEY=0x...`.
+  Если секрет провайдера не задан, `submit-title`/`submit-chapters` отвечают
+  400 `*_secret_missing` — заявки не проходят.
+- `USER_KEY_ENC_SECRET` — ключ шифрования персональных Gemini-ключей админов
+  (AES-256-GCM, `/admin/settings`). **Потеря или смена секрета делает все
+  сохранённые ключи нечитаемыми** — порядок ротации в SETUP_SUPABASE.md,
+  «Ротация USER_KEY_ENC_SECRET».
 
 `RESEND_API_KEY` и `OWNER_NOTIFY_EMAIL` уже используются Login Guard; ими же
 подписывается письмо заявителю (`notify-submitter`), поэтому повторно задавать
@@ -85,24 +99,43 @@ supabase secrets set CAPTCHA_PROVIDER=hcaptcha HCAPTCHA_SECRET_KEY="0x..."
 ### 3. Деплой edge-функций
 
 ```bash
-supabase functions deploy submit-title
-supabase functions deploy get-submission
-supabase functions deploy notify-submitter   # опционально
+# Публичные: клиент шлёт только apikey, JWT нет. Флаг --no-verify-jwt
+# ОБЯЗАТЕЛЕН: supabase/config.toml в репозитории нет, поэтому деплой без флага
+# выставит verify_jwt=true и анонимные заявки отвалятся на 401.
+supabase functions deploy submit-title --no-verify-jwt
+supabase functions deploy get-submission --no-verify-jwt
+supabase functions deploy submit-chapters --no-verify-jwt
+
+# Под сессией админа (JWT проверяет шлюз):
+supabase functions deploy gemini-proxy               # AI-анализ и озвучка
+supabase functions deploy admin-api-keys             # /admin/settings: свой Gemini key
+supabase functions deploy notify-submitter           # письмо заявителю о решении
+supabase functions deploy finalize-chapter-submission # перенос глав при approve
+
+# Login Guard — только если менялся их код:
+supabase functions deploy login-notify
+supabase functions deploy login-confirm
 ```
 
-`submit-title` — публичная (клиент шлёт только `apikey`), защита внутри:
-rate-limit по `sha256(ip + RATE_LIMIT_SALT)` → Turnstile/hCaptcha → валидация →
-upload в бакет `submissions` под `service_role` → INSERT в `admin_requests`.
-Запись анонима напрямую в таблицу закрыта RLS («no anon insert»).
+`submit-title` / `submit-chapters` — публичные: rate-limit по
+`sha256(ip + RATE_LIMIT_SALT)` → капча → валидация → upload в бакет
+`submissions` под `service_role` → INSERT в `admin_requests`. Запись анонима
+напрямую в таблицу закрыта RLS («no anon insert»).
+`gemini-proxy` / `admin-api-keys` работают на **персональном** ключе админа из
+`user_api_keys` (общего `GEMINI_API_KEY` в прод-пути нет).
 
 ### 4. Vercel env + Redeploy
 
 Vercel → Settings → Environment Variables (Production и Preview):
 
-- `VITE_CAPTCHA_PROVIDER=turnstile` (или `hcaptcha`)
-- `VITE_TURNSTILE_SITE_KEY=...` (или `VITE_HCAPTCHA_SITE_KEY=...` при hCaptcha)
+- `VITE_SITE_URL=https://<домен>` (canonical, sitemap, og:url)
+- `VITE_CAPTCHA_PROVIDER=recaptcha` + `VITE_RECAPTCHA_SITE_KEY=...`
+  (`recaptcha` уже зашит в `.env.production`, так что переменные на Vercel
+  нужны только чтобы переопределить провайдера при смене виджета)
 
 После сохранения — обязательный **Redeploy**: Vite вшивает env на этапе сборки.
+Секреты (`RECAPTCHA_SECRET_KEY`, `USER_KEY_ENC_SECRET`, `RATE_LIMIT_SALT`)
+остаются только в Supabase — на Vercel их быть не должно.
 
 Если Supabase-значения на Vercel названы по Next.js-шаблону
 (`NEXT_PUBLIC_SUPABASE_URL` / `NEXT_PUBLIC_SUPABASE_ANON_KEY`), дублировать их в
@@ -112,7 +145,14 @@ Vercel → Settings → Environment Variables (Production и Preview):
 `SUPABASE_ANON_KEY`: префикс `SUPABASE_` в браузерный бандл не попадает (защита
 от `SUPABASE_SERVICE_ROLE_KEY`), для клиента нужно имя `VITE_SUPABASE_ANON_KEY`.
 
-### 5. Cron (опционально)
+### 5. Свой Gemini key у админа (после миграции 17 и деплоя функций)
+
+Каждый админ заходит в `/admin/settings`, вставляет ключ из Google AI Studio
+(`AQ.…` или `AIza…`) и получает статус «подключён». Пока ключа нет,
+`gemini-proxy` отвечает 403 `gemini_key_missing`. Общий `GEMINI_API_KEY`
+в проде не нужен (он остался только для dev-мидлвари `npm run dev`).
+
+### 6. Cron (опционально)
 
 Supabase Dashboard → Database → Cron:
 
@@ -123,7 +163,7 @@ select cron.schedule('cleanup-ip-rate-limit', '5 4 * * *',
   $$select public.cleanup_ip_rate_limit()$$);
 ```
 
-### 6. Проверка
+### 7. Проверка
 
 ```bash
 npm run check:covers
@@ -133,6 +173,10 @@ SUPABASE_URL=https://islgkqdsztchzajnulof.supabase.co \
 SUPABASE_SERVICE_ROLE_KEY=... npm run check:submissions
 ```
 
+`npm run check:supabase` печатает таблицы (включая `user_api_keys`), RPC, бакеты
+и деплой функций (`login-*`, `gemini-proxy`, `admin-api-keys`): 404 = функция не
+задеплоена.
+
 Smoke без браузера (ключ publishable публичный):
 
 ```bash
@@ -140,11 +184,18 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST \
   "https://islgkqdsztchzajnulof.supabase.co/functions/v1/get-submission" \
   -H "apikey: <publishable-key>" -H "Content-Type: application/json" \
   -d '{"token":"nonexistent"}'
-# ожидаемо: 404 (заявки с таким токеном нет)
+# ожидаемо: 404 (заявки с таким токеном нет); 401 = verify_jwt включился
+# при деплое без --no-verify-jwt
+
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  "https://islgkqdsztchzajnulof.supabase.co/functions/v1/submit-chapters" \
+  -H "apikey: <publishable-key>" -H "Content-Type: application/json" -d '{}'
+# ожидаемо: 400 (валидация тела), 404 = функция не задеплоена
 ```
 
 И вручную: прод → «+» → «Предложить тайтл» → заполнить → отправить → заявка
 видна в `/admin/requests`; письмо о решении уходит, если заявитель оставил email.
+Отдельно: `/admin/settings` → вставить ключ Gemini → статус «подключён».
 
 ## Откат
 
@@ -163,6 +214,11 @@ Vercel поднимет предыдущую сборку. Миграции от
 - Бакет `hikko-originals` из `00000000000002_storage_buckets.sql` на проекте
   отсутствует (`npm run check:supabase` показывает ✗) — файл накатывался руками
   до правок, нужно выполнить его `insert into storage.buckets …` отдельно.
+- `supabase/config.toml` в репозитории нет, поэтому `verify_jwt` задаётся только
+  флагом деплоя: публичные функции (`submit-title`, `get-submission`,
+  `submit-chapters`) обязаны выкладываться с `--no-verify-jwt`. Проверка:
+  анонимный POST без `Authorization` отвечает 400 (ок) или 401 (verify_jwt
+  включился, заявки сломаны).
 - Edge-функции **не** покрыты `npm run typecheck` (`tsconfig.json` → `include: ["src"]`),
-  поэтому ошибки вроде `p_limit` вместо `p_limit: limit` ловятся только
-  smoke-тестом. После деплоя функции всегда проверяйте её вызовом.
+  поэтому ошибки вроде вызова RPC с чужим именем параметра ловятся только
+  вызовом функции. После деплоя всегда проверяйте её вызовом (см. раздел 7).

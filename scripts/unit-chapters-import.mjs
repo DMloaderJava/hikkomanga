@@ -14,6 +14,7 @@
  *   7. план импорта: глава без файлов, файлы без главы, нераспознанные имена.
  */
 import { createServer } from 'vite';
+import { fileURLToPath } from 'node:url';
 
 const failures = [];
 const check = (name, cond, detail = '') => {
@@ -22,7 +23,9 @@ const check = (name, cond, detail = '') => {
 };
 
 const server = await createServer({
-  root: new URL('..', import.meta.url).pathname,
+  // fileURLToPath, а не URL.pathname: на Windows `.pathname` даёт '/D:/…',
+  // и Vite делает из этого несуществующий 'D:\D:\…' → ENOENT при mkdir .vite.
+  root: fileURLToPath(new URL('..', import.meta.url)),
   envFile: false,
   server: { middlewareMode: true },
   appType: 'custom',
