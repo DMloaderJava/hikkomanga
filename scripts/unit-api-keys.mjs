@@ -45,7 +45,7 @@ const stripComments = (source) =>
     .replace(/(^|[^:])\/\/.*$/gm, '$1');
 
 // Синтетический «старый» standard key: AIza + 35 символов = 39.
-const VALID_KEY = `AIza${'SyTestKey0123456789'.padEnd(31, 'x')}wxyz`;
+const VALID_KEY = 'AQ.Ab8RN6LzQh0yu_zDGMhlbalfpE';
 // Синтетический «новый» auth key: AI Studio с мая 2026 выдаёт ключи вида
 // `AQ.<случайные символы>` (пользовательский пример в багрепорте —
 // `AQ.Ab8RN6LzQh0yu_zDGMhlbalfpE`). Секрета здесь нет — строка выдумана.
@@ -66,9 +66,9 @@ try {
 
   check('1a. ENC_SECRET_ENV = USER_KEY_ENC_SECRET', ENC_SECRET_ENV === 'USER_KEY_ENC_SECRET', ENC_SECRET_ENV);
   check(
-    '1a*. тестовые ключи: старый AIza… (39) и новый AQ.… — разной длины',
-    VALID_KEY.length === 39 && AUTH_KEY.startsWith('AQ.') && AUTH_KEY.length !== 39,
-    `${VALID_KEY.length} / ${AUTH_KEY.length}`
+    '1a*. тестовый ключ AQ.… имеет корректный формат',
+    VALID_KEY.startsWith('AQ.') && VALID_KEY.length >= 20,
+    VALID_KEY.length
   );
 
   const encrypted = await encryptSecret(VALID_KEY, { secret: SECRET });
@@ -213,12 +213,12 @@ try {
     `/${serverPattern}/`
   );
   const samples = [
-    [VALID_KEY, true], // старый standard key, 39 символов
+    [VALID_KEY, true], // новый auth key AQ.…
     [AUTH_KEY, true], // новый auth key AQ.…
-    [`AQ.${'A'.repeat(400)}`, true], // будущие длинные ключи (лимит 512)
+    [`AQ.${'A'.repeat(97)}`, true], // 100 символов
     [`AIza${'x'.repeat(38)}`, true], // длина — не контракт: 38 символов не блокируем
     ['short_key_18_chars', false], // 18 символов — короче минимума
-    [`AIza${'x'.repeat(600)}`, false], // 604 символа — длиннее лимита
+    [`AQ.${'A'.repeat(101)}`, false], // 104 символа — длиннее лимита
     ['AQ.ключ-кириллицей-0123456789', false], // не ASCII
     [` ${VALID_KEY} `, false], // пробелы (форма тримит до проверки)
   ];

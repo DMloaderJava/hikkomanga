@@ -37,7 +37,7 @@ const PROVIDER = 'gemini';
  * расхождение ловит scripts/unit-api-keys.mjs. По-настоящему ключ проверяет
  * только сам Gemini — при первом же запросе (см. gemini-proxy).
  */
-const GEMINI_KEY_RE = /^[A-Za-z0-9._\-]{20,512}$/;
+const GEMINI_KEY_RE = /^[A-Za-z0-9_\-\.]{20,100}$/;
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {

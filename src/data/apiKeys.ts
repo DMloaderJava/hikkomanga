@@ -30,7 +30,7 @@ import { SUPABASE_URL } from '@/integrations/supabase/config';
  * Проверка продублирована в edge-функции (admin-api-keys/index.ts), расхождение
  * ловит scripts/unit-api-keys.mjs.
  */
-export const GEMINI_API_KEY_RE = /^[A-Za-z0-9._\-]{20,512}$/;
+export const GEMINI_API_KEY_RE = /^[A-Za-z0-9_\-\.]{20,100}$/;
 export const GEMINI_PROVIDER = 'gemini';
 
 export interface ApiKeyStatus {
