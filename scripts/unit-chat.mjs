@@ -62,7 +62,8 @@ try {
   const { parseDataUrl, toGeminiContents } = await vite.ssrLoadModule(
     '/supabase/functions/_shared/gemini-chat.ts'
   );
-  const { CHAT_ERROR_MESSAGES, parseGeminiSSE } = await vite.ssrLoadModule('/src/data/chat.ts');
+  const { CHAT_DEMO_MESSAGE, CHAT_ERROR_MESSAGES, ChatError, parseGeminiSSE, streamChat } =
+    await vite.ssrLoadModule('/src/data/chat.ts');
 
   // ── 1. Конвертация сообщений ──────────────────────────────────────────────
   const history = toGeminiContents([
@@ -168,6 +169,24 @@ try {
     ['unauthorized', 'gemini_key_missing', 'rate_limit', 'unknown'].every(
       (code) => typeof CHAT_ERROR_MESSAGES[code] === 'string' && CHAT_ERROR_MESSAGES[code]
     )
+  );
+
+  // Демо-режим (тесты идут с forceDemoMode): без VITE_SUPABASE_* обращаться
+  // некуда, и сообщение обязано говорить про конфиг окружения, а не про
+  // незадеплоенную функцию — иначе админ чинит не то.
+  let demoError = null;
+  try {
+    await streamChat({ messages: [{ role: 'user', content: 'привет' }] });
+  } catch (error) {
+    demoError = error;
+  }
+  check(
+    '2e. в демо-режиме streamChat ругается на окружение, а не на деплой функции',
+    demoError instanceof ChatError &&
+      demoError.message === CHAT_DEMO_MESSAGE &&
+      /Демо-режим/.test(demoError.message) &&
+      !/deploy/.test(demoError.message),
+    demoError?.message
   );
 
   // ── 3. Контракт edge-функции chat ─────────────────────────────────────────

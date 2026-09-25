@@ -32,6 +32,15 @@ export class ChatError extends Error {
   }
 }
 
+/**
+ * Демо-режим (`npm run dev` без `.env`: нет `VITE_SUPABASE_*`) — обращаться
+ * некуда, edge-функции нет ни в каком виде. Отдельный текст, чтобы админ не
+ * искал незадеплоенную функцию там, где дело в конфиге окружения: сообщение
+ * `unknown` про «проверьте деплой» в этом случае просто врёт.
+ */
+export const CHAT_DEMO_MESSAGE =
+  'Демо-режим: Supabase не настроен, чат недоступен. Задайте VITE_SUPABASE_URL и VITE_SUPABASE_ANON_KEY (см. SETUP_SUPABASE.md) и перезапустите dev-сервер.';
+
 export const CHAT_ERROR_MESSAGES: Record<ChatErrorCode, string> = {
   unauthorized: 'Сессия истекла — войдите заново, чтобы задать вопрос.',
   gemini_key_missing: 'Для чата нужен ключ Gemini. Обратитесь к администратору.',
@@ -181,7 +190,7 @@ export async function streamChat({
   signal,
 }: StreamChatOptions): Promise<AsyncIterable<string>> {
   if (!isSupabaseConfigured) {
-    throw new ChatError('unknown', CHAT_ERROR_MESSAGES.unknown);
+    throw new ChatError('unknown', CHAT_DEMO_MESSAGE);
   }
 
   const supabase = await getSupabase();

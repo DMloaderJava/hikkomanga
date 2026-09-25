@@ -336,6 +336,13 @@ try {
       Boolean(root.querySelector('[data-panel-resize-handle-id]')) &&
       root.querySelector('[data-testid="toggle"]')?.textContent === 'Закрыть чат'
   );
+  // Тесты идут в демо-режиме (forceDemoMode): панель обязана сразу сказать, что
+  // Supabase не настроен, а не показывать ошибку про «незадеплоенную функцию».
+  check(
+    '2d. в демо-режиме панель предупреждает про ненастроенный Supabase',
+    root.textContent.includes('Демо-режим: Supabase не настроен') &&
+      root.textContent.includes('VITE_SUPABASE_URL')
+  );
 
   // ── 3. Стрим ответа ───────────────────────────────────────────────────────
   const form = openedTextarea.closest('form');

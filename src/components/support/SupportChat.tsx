@@ -1,8 +1,9 @@
 import * as React from 'react';
-import { Loader2, MessageCircle, Paperclip, Send, Square, Volume2, X } from 'lucide-react';
+import { AlertTriangle, Loader2, MessageCircle, Paperclip, Send, Square, Volume2, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
+import { isSupabaseConfigured } from '@/data/client';
 import { CHAT_ERROR_MESSAGES, streamChat, ChatError, type ChatMessage } from '@/data/chat';
 import { DialogTtsError, DIALOG_TTS_ERROR_MESSAGES, synthesizeDialog } from '@/data/dialogTts';
 import { useSupportChat } from './SupportChatContext';
@@ -231,6 +232,21 @@ export function SupportChat() {
       </div>
 
       <div className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
+        {/* Демо-режим: отправлять некуда. Предупреждаем сразу, а не после
+            первого вопроса — иначе ошибка выглядит как «функция не
+            задеплоена», хотя дело в окружении. */}
+        {!isSupabaseConfigured && (
+          <div className="flex items-start gap-2 rounded-lg border border-amber-900/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-200">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+            <span>
+              Демо-режим: Supabase не настроен, ассистент отвечать не будет. Задайте{' '}
+              <code className="text-amber-100">VITE_SUPABASE_URL</code> и{' '}
+              <code className="text-amber-100">VITE_SUPABASE_ANON_KEY</code> и перезапустите
+              dev-сервер — см. SETUP_SUPABASE.md.
+            </span>
+          </div>
+        )}
+
         {messages.length === 0 && (
           <p className="text-xs leading-relaxed text-neutral-500">
             Задайте вопрос про загрузку глав, озвучку, AI-анализ страниц или роли — ассистент ответит
