@@ -67,6 +67,47 @@ try {
   check('normalize: data:URL проходит без изменений', storageUrl.normalizeMediaUrl('data:image/svg+xml;utf8,<svg/>') === 'data:image/svg+xml;utf8,<svg/>');
   check('normalize: голый путь бакета не ломается', storageUrl.normalizeMediaUrl('ch1/1-123-original.jpg') === 'ch1/1-123-original.jpg');
 
+  // ── normalizeCoverUrl: канонический путь обложки /media/covers/{slug}.webp ──
+  check(
+    'coverPath: /media/covers/x.webp → как есть',
+    storageUrl.normalizeCoverUrl('/media/covers/x.webp') === '/media/covers/x.webp'
+  );
+  check(
+    'coverPath: без ведущего / → media/covers/x.webp → /media/covers/x.webp',
+    storageUrl.normalizeCoverUrl('media/covers/x.webp') === '/media/covers/x.webp'
+  );
+  check(
+    'coverPath: ./media/covers/x.webp → /media/covers/x.webp',
+    storageUrl.normalizeCoverUrl('./media/covers/x.webp') === '/media/covers/x.webp'
+  );
+  check(
+    'coverPath: public/media/covers/x.webp → /media/covers/x.webp',
+    storageUrl.normalizeCoverUrl('public/media/covers/x.webp') === '/media/covers/x.webp'
+  );
+  check(
+    'coverPath: trim + пустое/null → null',
+    storageUrl.normalizeCoverUrl('  /media/covers/x.webp  ') === '/media/covers/x.webp' &&
+      storageUrl.normalizeCoverUrl('') === null &&
+      storageUrl.normalizeCoverUrl('   ') === null &&
+      storageUrl.normalizeCoverUrl(null) === null &&
+      storageUrl.normalizeCoverUrl(undefined) === null
+  );
+  check(
+    'coverPath: http(s):// и пути диска не ломаются (их отклоняет downstream)',
+    storageUrl.normalizeCoverUrl('https://cdn.example.com/x.webp') === 'https://cdn.example.com/x.webp' &&
+      storageUrl.normalizeCoverUrl('http://cdn.example.com/x.webp') === 'http://cdn.example.com/x.webp' &&
+      storageUrl.normalizeCoverUrl('C:\\covers\\x.webp') === 'C:\\covers\\x.webp' &&
+      storageUrl.normalizeCoverUrl('data:image/png;base64,xx') === 'data:image/png;base64,xx'
+  );
+  check(
+    'coverPath: после нормализации относительный путь проходит CSP-проверку',
+    storageUrl.isMediaUrlCspAllowed(storageUrl.normalizeCoverUrl('media/covers/x.webp')) === true
+  );
+  check(
+    'coverPath: внешняя https после нормализации CSP-проверкой всё равно отклоняется',
+    storageUrl.isMediaUrlCspAllowed(storageUrl.normalizeCoverUrl('https://cdn.example.com/x.webp')) === false
+  );
+
   // ── supabaseStoragePublicUrl / storagePathFromUrl (pages/voiceovers) ──
   const built = storageUrl.supabaseStoragePublicUrl('manga', 'ch1/1-2.webp');
   check('publicUrl собирается из пути бакета', built === `${TEST_REF}/storage/v1/object/public/manga/ch1/1-2.webp`, built);
@@ -154,6 +195,24 @@ try {
   );
   const listed = (await titles.listAll()).find((t) => t.slug === 'cover-local-e2e');
   check('e2e: чтение из списка не искажает путь', listed?.cover_url === '/media/covers/test.webp', listed?.cover_url || '(null)');
+
+  // Регрессия «нельзя опубликовать тайтл»: относительный путь из формы
+  // (без ведущего /) обязан сохраниться в канонической форме, а не
+  // отклониться или записаться «как напечатано».
+  const createdRel = await titles.create({
+    slug: 'cover-relative-e2e',
+    title: 'E2E: относительный путь',
+    cover_url: 'media/covers/test.webp',
+    published: true,
+  });
+  check(
+    'e2e: create с media/covers/… (без ведущего /) сохраняет /media/covers/…',
+    createdRel.cover_url === '/media/covers/test.webp',
+    createdRel.cover_url || '(null)'
+  );
+  const relListed = (await titles.listAll()).find((t) => t.slug === 'cover-relative-e2e');
+  check('e2e: чтение из списка приводит путь к канону', relListed?.cover_url === '/media/covers/test.webp', relListed?.cover_url || '(null)');
+  await titles.delete(createdRel.id);
 
   // Сиды ссылаются на файлы /media/covers/, а не на data-URL.
   const seeds = await titles.listAll();

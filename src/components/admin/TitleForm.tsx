@@ -1,14 +1,40 @@
 import { useState, useEffect } from 'react';
 import type { Title, Genre, TitleInput } from '@/data/types';
 import { slugify } from '@/lib/slugify';
-import { isMediaUrlCspAllowed, normalizeMediaUrl } from '@/lib/storageUrl';
+import { isMediaUrlCspAllowed, normalizeCoverUrl } from '@/lib/storageUrl';
 import { CoverImage } from '@/components/manga/CoverImage';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { Plus, Lock, Image as ImageIcon, RotateCcw, Trash2 } from 'lucide-react';
+import { Plus, Lock, Image as ImageIcon, RotateCcw, Trash2, RefreshCw } from 'lucide-react';
+
+/**
+ * Причина отклонения обложки — конкретная, под тип провала. Единое общее
+ * сообщение не давало понять, что именно не так со значением: админ видел
+ * «нельзя опубликовать тайтл» и не знал, какое поле поправить.
+ */
+function coverRejectionReason(raw: string, normalized: string | null): string {
+  const hint =
+    'Положите WebP-файл (≤800 px по ширине) в public/media/covers/ и укажите ' +
+    'путь вида /media/covers/{slug}.webp — кнопка под полем подставит его ' +
+    'по текущему slug.';
+  if (/^http:\/\//i.test(raw)) {
+    return (
+      'Ссылка http:// не пройдёт: на https-странице браузер блокирует ' +
+      'смешанный контент. ' + hint
+    );
+  }
+  if (normalized && /^https?:\/\//i.test(normalized)) {
+    return (
+      'Внешние ссылки на обложку не поддерживаются: домен может умереть, а ' +
+      'хотлинк-защита стороннего хостинга вернёт 403 — и весь каталог ' +
+      'превратится в битые картинки. ' + hint
+    );
+  }
+  return `Не похоже на путь к файлу репозитория («${raw}»). ` + hint;
+}
 
 interface TitleFormProps {
   initialData?: Title | null;
@@ -42,6 +68,14 @@ export function TitleForm({
   const [newGenreName, setNewGenreName] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [hasDraft, setHasDraft] = useState(false);
+  // Живая проверка, что файл обложки реально существует (HEAD-запрос к
+  // статике). Это НЕ блок — предупреждение: можно опубликовать и без файла,
+  // но тогда CoverImage покажет плейсхолдер.
+  const [coverCheck, setCoverCheck] = useState<'idle' | 'checking' | 'ok' | 'missing'>(
+    'idle'
+  );
+  // Счётчик ручной повторной проверки (файл положили — жмём, не перебивая путь).
+  const [coverCheckNonce, setCoverCheckNonce] = useState(0);
 
   // Check for saved draft on mount
   useEffect(() => {
@@ -86,6 +120,39 @@ export function TitleForm({
     }
   }, [title, isEditing]);
 
+  // Живая проверка наличия файла обложки. Проверяем только относительные
+  // пути ('self') — внешние ссылки уже помечены ошибкой формы. Запрос с
+  // дебаунсом, чтобы не ходить в сеть на каждый символ.
+  useEffect(() => {
+    const path = normalizeCoverUrl(coverUrl);
+    if (!path || !path.startsWith('/') || !isMediaUrlCspAllowed(path)) {
+      setCoverCheck('idle');
+      return;
+    }
+    if (typeof window === 'undefined' || typeof window.fetch !== 'function') {
+      setCoverCheck('idle');
+      return;
+    }
+    let cancelled = false;
+    setCoverCheck('checking');
+    // Дебаунс нужен при наборе текста; ручная повторная проверка идёт сразу.
+    const delay = coverCheckNonce === 0 ? 350 : 0;
+    const timer = setTimeout(() => {
+      window
+        .fetch(path, { method: 'HEAD' })
+        .then((r) => {
+          if (!cancelled) setCoverCheck(r.ok ? 'ok' : 'missing');
+        })
+        .catch(() => {
+          if (!cancelled) setCoverCheck('missing');
+        });
+    }, delay);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [coverUrl, coverCheckNonce]);
+
   const handleRestoreDraft = () => {
     try {
       const saved = localStorage.getItem(draftStorageKey);
@@ -110,6 +177,25 @@ export function TitleForm({
   const handleDiscardDraft = () => {
     localStorage.removeItem(draftStorageKey);
     setHasDraft(false);
+  };
+
+  // Стандартный путь обложки для текущего slug — одной кнопкой снимает
+  // вопрос «какой путь писать».
+  const standardCoverPath = slug.trim() ? `/media/covers/${slug.trim()}.webp` : null;
+
+  const handleUseStandardCover = () => {
+    if (!standardCoverPath) return;
+    setCoverUrl(standardCoverPath);
+    setError(null);
+  };
+
+  // После того как пользователь закончил вводить — тихо приводим значение
+  // к канону: media/covers/x.webp → /media/covers/x.webp и т.п.
+  const handleCoverBlur = () => {
+    const normalized = normalizeCoverUrl(coverUrl);
+    if (normalized && normalized !== coverUrl) {
+      setCoverUrl(normalized);
+    }
   };
 
   const handleGenreToggle = (id: string) => {
@@ -143,17 +229,14 @@ export function TitleForm({
       return;
     }
 
-    // Обложка: нормализуем (trim, '' → null) и отклоняем то, что продовый CSP
-    // заведомо не пропустит (внешние домены, http://) — иначе админ сохранит
-    // тайтл и только потом обнаружит битую картинку. Обложки — файлы
-    // репозитория: /media/covers/{slug}.webp; относительные пути проходят.
-    const normalizedCover = normalizeMediaUrl(coverUrl);
+    // Обложка: приводим к канонической форме (/media/covers/{slug}.webp —
+    // trim, './', 'public/', ведущий '/' — так что «media/covers/x.webp»
+    // больше не блокирует публикацию) и отклоняем то, что политика проекта
+    // не пропускает (внешние домены, http://) — иначе админ сохранит тайтл
+    // и только потом обнаружит битую картинку.
+    const normalizedCover = normalizeCoverUrl(coverUrl);
     if (normalizedCover && !isMediaUrlCspAllowed(normalizedCover)) {
-      setError(
-        'Допустим только путь к файлу репозитория вида /media/covers/slug.webp ' +
-          '(внешние домены и http:// CSP блокирует). Положите WebP-файл в ' +
-          'public/media/covers/ и укажите его путь здесь.'
-      );
+      setError(coverRejectionReason(coverUrl.trim(), normalizedCover));
       return;
     }
 
@@ -214,7 +297,11 @@ export function TitleForm({
           <Label>Обложка тайтла</Label>
           <div className="relative aspect-[3/4] w-full rounded-xl border-2 border-dashed border-neutral-800 bg-neutral-900/50 flex flex-col items-center justify-center overflow-hidden">
             {coverUrl ? (
-              <CoverImage src={coverUrl} title={title || 'Тайтл'} className="h-full w-full object-cover" />
+              <CoverImage
+                src={normalizeCoverUrl(coverUrl)}
+                title={title || 'Тайтл'}
+                className="h-full w-full object-cover"
+              />
             ) : (
               <div className="flex flex-col items-center gap-2 p-6 text-center">
                 <ImageIcon className="h-10 w-10 text-neutral-600" />
@@ -229,13 +316,56 @@ export function TitleForm({
             placeholder="/media/covers/slug.webp"
             value={coverUrl}
             onChange={(e) => setCoverUrl(e.target.value)}
+            onBlur={handleCoverBlur}
             className="text-xs"
           />
+          {standardCoverPath && normalizeCoverUrl(coverUrl) !== standardCoverPath && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleUseStandardCover}
+              className="h-7 gap-1 text-xs border-neutral-800"
+            >
+              <ImageIcon className="h-3.5 w-3.5" /> Подставить {standardCoverPath}
+            </Button>
+          )}
+          {coverCheck !== 'idle' && (
+            <div className="flex items-start gap-2">
+              {coverCheck === 'checking' && (
+                <p className="text-[11px] leading-snug text-neutral-500">
+                  Проверка файла обложки…
+                </p>
+              )}
+              {coverCheck === 'ok' && (
+                <p className="text-[11px] leading-snug text-emerald-400">
+                  Файл на месте — обложка отобразится на сайте.
+                </p>
+              )}
+              {coverCheck === 'missing' && (
+                <p className="text-[11px] leading-snug text-amber-400">
+                  Файла не нашлось — обложка покажет плейсхолдер, пока вы не
+                  положите WebP в <code>public/media/covers/</code> и не
+                  запустите изменение (commit + деплой). Тайтл можно публиковать
+                  и без файла.
+                </p>
+              )}
+              <button
+                type="button"
+                title="Проверить наличие файла ещё раз"
+                onClick={() => setCoverCheckNonce((n) => n + 1)}
+                className="mt-0.5 shrink-0 text-neutral-500 hover:text-neutral-300"
+              >
+                <RefreshCw className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
           <p className="text-[11px] leading-snug text-neutral-500">
             Обложки — файлы репозитория: положите WebP (≤800 px по ширине) в{' '}
             <code>public/media/covers/</code> и укажите путь вида{' '}
-            <code>/media/covers/{'{slug}'}.webp</code>. Если файла нет — превью и сайт
-            покажут плейсхолдер, а dev-консоль объяснит, какой путь не нашёлся.
+            <code>/media/covers/{'{slug}'}.webp</code>. Запись без ведущего{' '}
+            <code>/</code> (например, <code>media/covers/slug.webp</code>) приводится
+            к канону автоматически. Внешние ссылки не поддерживаются.
           </p>
         </div>
 

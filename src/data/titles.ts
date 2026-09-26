@@ -1,7 +1,7 @@
 import { getSupabase, isSupabaseConfigured } from './client';
 import { mockStore } from './mockStore';
 import { chapters as chaptersApi } from './chapters';
-import { normalizeMediaUrl } from '@/lib/storageUrl';
+import { normalizeCoverUrl } from '@/lib/storageUrl';
 import { type Title, type TitleInput, type Genre, SlugConflictError } from './types';
 
 function normalizeTitleRow(row: any): Title {
@@ -15,9 +15,10 @@ function normalizeTitleRow(row: any): Title {
     title: row.title,
     author: row.author ?? null,
     description: row.description ?? null,
-    // Нормализация обложки: trim, '' → null, http→https, мёртвые refs → текущий
-    // проект (см. storageUrl.ts). Единая точка — normalizeMediaUrl.
-    cover_url: normalizeMediaUrl(row.cover_url),
+    // Нормализация обложки: канонический путь /media/covers/{slug}.webp —
+    // trim, '' → null, относительные записи (media/covers/…, public/…)
+    // приводятся к ведущему / (см. normalizeCoverUrl). Единая точка.
+    cover_url: normalizeCoverUrl(row.cover_url),
     status: row.status ?? 'ongoing',
     published: row.published ?? false,
     created_at: row.created_at || new Date().toISOString(),
@@ -116,8 +117,8 @@ export const titles = {
       const supabase = await getSupabase();
       const { genre_ids, ...rawTitleData } = input;
       // Обложку нормализуем ДО записи: в БД не должно попадать « HTTP://… »,
-      // пустых строк и внешних доменов, которые потом молча режет CSP.
-      const titleData = { ...rawTitleData, cover_url: normalizeMediaUrl(rawTitleData.cover_url) };
+      // пустых строк, внешних доменов и относительных путей без ведущего /.
+      const titleData = { ...rawTitleData, cover_url: normalizeCoverUrl(rawTitleData.cover_url) };
       const { data, error } = await supabase
         .from('titles')
         .insert(titleData)
@@ -159,7 +160,7 @@ export const titles = {
       const { genre_ids, ...rawTitleData } = input;
       const titleData =
         'cover_url' in rawTitleData
-          ? { ...rawTitleData, cover_url: normalizeMediaUrl(rawTitleData.cover_url) }
+          ? { ...rawTitleData, cover_url: normalizeCoverUrl(rawTitleData.cover_url) }
           : rawTitleData;
 
       if (Object.keys(titleData).length > 0) {
