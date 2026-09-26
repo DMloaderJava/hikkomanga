@@ -13,7 +13,8 @@ import { SUPABASE_URL } from '@/integrations/supabase/config';
  *
  * Обложки тайтлов бывают двух видов: файл репозитория (public/media/covers/,
  * в titles.cover_url относительный путь /media/covers/{slug}.webp) и объект
- * публичного бакета Storage `covers` (загрузка из админки — TitleForm).
+ * публичного бакета Storage `title-covers` (загрузка из админки — TitleForm;
+ * до миграции 20 бакет назывался `covers`).
  * Различает их isSupabaseStorageUrl(); нормализация и CSP-проверка ниже
  * корректны для обоих.
  *
@@ -132,7 +133,7 @@ export function storagePathFromUrl(
   if (!url || typeof url !== 'string') return null;
   if (url.startsWith('data:')) return null;
   if (!/^https?:\/\//i.test(url)) {
-    // Голый путь (`covers/…`) — допустимый формат хранения.
+    // Голый путь (`title-covers/…`) — допустимый формат хранения.
     return url.includes('/') ? url.replace(/^\/+/, '') : null;
   }
   const marker = `/${bucket}/`;
@@ -144,7 +145,7 @@ export function storagePathFromUrl(
 /**
  * Это публичный URL объекта Supabase Storage (а не файл репозитория и не
  * data-URL)? Именно так отличают «обложку загрузили из админки» (бакет
- * `covers`, URL вида `…/storage/v1/object/public/covers/…`) от «обложка —
+ * `title-covers`, URL вида `…/storage/v1/object/public/title-covers/…`) от «обложка —
  * файл репозитория» (`/media/covers/{имя}.webp`).
  *
  * Нужно, чтобы:

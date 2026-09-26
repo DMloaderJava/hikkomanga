@@ -1,5 +1,11 @@
 -- Обложки тайтлов, загруженные из админки (TitleForm → «Загрузить файл»).
 --
+-- ВНИМАНИЕ: бакет переименован — см. 00000000000020_title_covers_bucket.sql.
+-- Актуальное имя бакета `title-covers` (то же, что COVER_BUCKET в
+-- src/data/storage.ts), форматы — JPEG/PNG/WebP/GIF. Эта миграция оставлена
+-- как есть ради уже накатанных проектов; 20-я создаёт `title-covers` и
+-- убирает пустой `covers`.
+--
 -- Штатная обложка по-прежнему файл репозитория: public/media/covers/{имя}.webp,
 -- в titles.cover_url относительный путь /media/covers/{имя}.webp (кэш 'self',
 -- вес каталога ограничен бюджетом — scripts/check-budgets.mjs). Этот бакет —
@@ -29,3 +35,7 @@ create policy "admin write covers"
 
 -- Проверка: npm run check:supabase (раздел «5. Бакеты Storage») и
 -- npm run check:covers — он проверяет и файлы в public/, и URL из этого бакета.
+--
+-- Файл переименован с 00000000000018_title_covers.sql: версию 18 делили два
+-- файла (ещё и 00000000000018_publish_title.sql), а дубль версии ломает
+-- supabase db push и проверку «версии миграций уникальны» в npm test.

@@ -151,8 +151,9 @@ export function TitleForm({
   };
 
   /**
-   * Загрузить обложку из файла: валидация по байтам → WebP ≤800 px → бакет
-   * `covers` (или data-URL в демо-режиме). URL сразу попадает в поле cover_url,
+   * Загрузить обложку из файла: валидация по байтам (JPEG/PNG/WebP/GIF) →
+   * WebP ≤800 px (GIF — как есть, с анимацией) → бакет `title-covers`
+   * (или data-URL в демо-режиме). URL сразу попадает в поле cover_url,
    * но в БД окажется только после «Сохранить» — до этого момента файл просто
    * лежит в Storage, а при сохранении сироты удаляются (cleanupStaleCovers).
    */
@@ -165,13 +166,16 @@ export function TitleForm({
     setCoverUploading(true);
     try {
       const { storage } = await import('@/data/storage');
-      const { url, compressed, bytes } = await storage.uploadCover(file, { key: slug || title });
+      const { url, compressed, bytes, ext } = await storage.uploadCover(file, { key: slug || title });
       uploadedCoversRef.current.push(url);
       setCoverUrl(url);
+      const size = `${(bytes / 1024).toFixed(0)} kB`;
       setCoverNote(
         compressed
-          ? `Загружено: WebP, ${(bytes / 1024).toFixed(0)} kB. Сохраните тайтл, чтобы обложка закрепилась.`
-          : `Загружен исходник (${(bytes / 1024).toFixed(0)} kB): браузер не умеет кодировать WebP.`
+          ? `Загружено: WebP ≤800 px, ${size}. Сохраните тайтл, чтобы обложка закрепилась.`
+          : ext === 'gif'
+            ? `Загружено: GIF, ${size} — анимация сохранена. Сохраните тайтл, чтобы обложка закрепилась.`
+            : `Загружен исходник ${ext.toUpperCase()} (${size}): браузер не умеет кодировать WebP.`
       );
     } catch (err) {
       setCoverError(err instanceof Error ? err.message : 'Не удалось загрузить обложку');
@@ -243,7 +247,10 @@ export function TitleForm({
     // заведомо не пропустит (внешние домены, http://) — иначе админ сохранит
     // тайтл и только потом обнаружит битую картинку. Допустимы два вида:
     //   • файл репозитория — /media/covers/{slug}.webp (public/media/covers/);
-    //   • загрузка из этой формы — https://<ref>.supabase.co/storage/v1/object/public/covers/…
+    //   • загрузка из этой формы — https://<ref>.supabase.co/storage/v1/object/public/title-covers/…
+    // Проверка НЕ мешает загрузке файла: uploadCover возвращает URL того же
+    // Supabase-хоста (или data-URL в демо), а оба вида isMediaUrlCspAllowed
+    // пропускает (см. scripts/unit-covers.mjs, «save: загруженная обложка…»).
     const normalizedCover = normalizeMediaUrl(coverUrl);
     if (normalizedCover && !isMediaUrlCspAllowed(normalizedCover)) {
       setError(
@@ -275,7 +282,7 @@ export function TitleForm({
   const coverKindLabel = !coverUrl
     ? null
     : isSupabaseStorageUrl(coverUrl)
-      ? 'загружена в Storage (бакет covers)'
+      ? 'загружена в Storage (бакет title-covers)'
       : coverUrl.startsWith('data:')
         ? 'демо-режим (data-URL)'
         : 'файл репозитория';
@@ -411,10 +418,11 @@ export function TitleForm({
             className="text-xs"
           />
           <p className="text-[11px] leading-snug text-neutral-500">
-            Два способа. <b>Загрузить файл</b>: JPEG/PNG/WebP до{' '}
+            Два способа. <b>Загрузить файл</b>: изображение JPEG, PNG, WebP или GIF до{' '}
             {Math.round(COVER_MAX_BYTES / 1024 / 1024)} MB ({COVER_ACCEPT_EXT}) — картинка сожмётся в
-            WebP ≤800 px и уйдёт в бакет <code>covers</code>. <b>Файл репозитория</b>: положите WebP
-            в <code>public/media/covers/</code> и укажите путь{' '}
+            WebP ≤800 px (GIF загрузится как есть, с анимацией) и уйдёт в бакет{' '}
+            <code>title-covers</code>. <b>Файл репозитория</b>: положите WebP в{' '}
+            <code>public/media/covers/</code> и укажите путь{' '}
             <code>/media/covers/{'{slug}'}.webp</code>. Если файла нет — превью и сайт покажут
             плейсхолдер, а dev-консоль объяснит, какой путь не нашёлся.
           </p>

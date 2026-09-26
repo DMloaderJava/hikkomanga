@@ -29,6 +29,13 @@ const check = (name, cond, detail = '') => {
   if (!cond) failures.push(name);
 };
 
+/**
+ * Ровно та проверка, которую TitleForm.handleSubmit делает перед onSubmit:
+ * normalizeMediaUrl → isMediaUrlCspAllowed. Загруженная из формы обложка
+ * обязана её проходить, иначе админ видел бы красную ошибку на сохранении.
+ */
+let storageUrlCheck = () => false;
+
 const React = (await import('react')).default;
 const { renderToString } = await import('react-dom/server');
 
@@ -45,6 +52,10 @@ const server = await createServer({
 
 try {
   const storageUrl = await server.ssrLoadModule('/src/lib/storageUrl.ts');
+  storageUrlCheck = (url) => {
+    const normalized = storageUrl.normalizeMediaUrl(url);
+    return !!normalized && storageUrl.isMediaUrlCspAllowed(normalized) === true;
+  };
 
   // ── normalizeMediaUrl: относительные пути обложек — не трогаем ────────
   check(
@@ -95,11 +106,11 @@ try {
   check('csp: внешний CDN запрещён (защита от опечаток в пути)', storageUrl.isMediaUrlCspAllowed('https://cdn.example.com/cover.jpg') === false);
 
   // ── isSupabaseStorageUrl: «загружено из админки» vs «файл репозитория» ──
-  const coverObjUrl = `${TEST_REF}/storage/v1/object/public/covers/test-abc-123.webp`;
-  check('storage-url: URL бакета covers распознаётся', storageUrl.isSupabaseStorageUrl(coverObjUrl) === true, coverObjUrl);
+  const coverObjUrl = `${TEST_REF}/storage/v1/object/public/title-covers/test-abc-123.webp`;
+  check('storage-url: URL бакета title-covers распознаётся', storageUrl.isSupabaseStorageUrl(coverObjUrl) === true, coverObjUrl);
   check('storage-url: относительный путь репозитория — не Storage', storageUrl.isSupabaseStorageUrl('/media/covers/x.webp') === false);
   check('storage-url: data-URL — не Storage', storageUrl.isSupabaseStorageUrl('data:image/png;base64,xx') === false);
-  check('storage-url: внешний домен — не Storage', storageUrl.isSupabaseStorageUrl('https://cdn.example.com/storage/v1/object/public/covers/x.webp') === false);
+  check('storage-url: внешний домен — не Storage', storageUrl.isSupabaseStorageUrl('https://cdn.example.com/storage/v1/object/public/title-covers/x.webp') === false);
   check('storage-url: пусто/мусор — false', storageUrl.isSupabaseStorageUrl(null) === false && storageUrl.isSupabaseStorageUrl('   ') === false);
   check(
     'storage-url: загруженная обложка проходит CSP',
@@ -111,6 +122,7 @@ try {
   const pngBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
   const webpBytes = new Uint8Array(Buffer.from('RIFF0000WEBP'));
   const jpgBytes = new Uint8Array([255, 216, 255, 1, 2, 3]);
+  const gifBytes = new Uint8Array(Buffer.from('GIF89a\x01\x00\x01\x00\x00\x00\x00'));
 
   check('validate: PNG проходит', (await coverUpload.validateCoverFile(new File([pngBytes], 'cover.png'))).ok === true);
   check('validate: JPEG проходит', (await coverUpload.validateCoverFile(new File([jpgBytes], 'cover.jpg'))).ok === true);
@@ -119,10 +131,12 @@ try {
     'validate: расширение не решает — PNG под именем .jpg проходит (сигнатура)',
     (await coverUpload.validateCoverFile(new File([pngBytes], 'cover.jpg'))).ok === true
   );
+  check('validate: GIF проходит', (await coverUpload.validateCoverFile(new File([gifBytes], 'cover.gif'))).ok === true);
+  check('validate: accept формы — image/*, фильтром формата служат байты', coverUpload.COVER_ACCEPT === 'image/*', coverUpload.COVER_ACCEPT);
   {
     const pdf = new File([new Uint8Array(Buffer.from('%PDF-1.7'))], 'cover.pdf');
     const rejected = await coverUpload.validateCoverFile(pdf);
-    check('validate: PDF отклоняется с внятной причиной', rejected.ok === false && /JPEG, PNG или WebP/.test(rejected.reason), rejected.reason);
+    check('validate: PDF отклоняется с внятной причиной', rejected.ok === false && /JPEG, PNG, WebP или GIF/.test(rejected.reason), rejected.reason);
   }
   {
     const empty = await coverUpload.validateCoverFile(new File([], 'empty.png'));
@@ -155,16 +169,25 @@ try {
     check('prepare: без canvas грузится исходник (compressed=false)', prepared.compressed === false && prepared.blob.size === pngBytes.length, `${prepared.blob.type} ${prepared.blob.size}B`);
     check('prepare: MIME сохранён', prepared.blob.type === 'image/png', prepared.blob.type);
     const thrown = await coverUpload.prepareCoverImage(new File([new Uint8Array(Buffer.from('%PDF-1.7'))], 'c.pdf')).then(() => null, (e) => e.message);
-    check('prepare: не-картинка → ошибка с текстом для формы', typeof thrown === 'string' && /JPEG, PNG или WebP/.test(thrown), String(thrown));
+    check('prepare: не-картинка → ошибка с текстом для формы', typeof thrown === 'string' && /JPEG, PNG, WebP или GIF/.test(thrown), String(thrown));
+  }
+  {
+    // GIF не перекодируется: canvas оставил бы только первый кадр.
+    const gif = await coverUpload.prepareCoverImage(new File([gifBytes], 'cover.gif'));
+    check('prepare: GIF уходит как есть (анимация сохраняется)', gif.ext === 'gif' && gif.compressed === false && gif.blob.type === 'image/gif', `${gif.ext} ${gif.blob.type} ${gif.blob.size}B`);
+    check('prepare: байты GIF не изменены', gif.blob.size === gifBytes.length, `${gif.blob.size}B`);
+    const png = await coverUpload.prepareCoverImage(new File([pngBytes], 'cover.png'));
+    check('prepare: ext исходника возвращается (имя объекта в бакете)', png.ext === 'png', png.ext);
   }
 
   // ── TitleForm (SSR): загрузка файла рядом с полем пути ──────────────────
   const { TitleForm } = await server.ssrLoadModule('/src/components/admin/TitleForm.tsx');
   const formHtml = renderToString(React.createElement(TitleForm, { allGenres: [], onSubmit: async () => {} }));
-  check('form: есть input[type=file] с accept JPEG/PNG/WebP', /<input[^>]*type="file"[^>]*accept="image\/jpeg,image\/png,image\/webp"/.test(formHtml), formHtml.match(/<input[^>]*type="file"[^>]*>/)?.[0] || '(нет)');
+  check('form: есть input[type=file] с accept image/* (JPEG/PNG/WebP/GIF проходят)', /<input[^>]*type="file"[^>]*accept="image\/\*"/.test(formHtml), formHtml.match(/<input[^>]*type="file"[^>]*>/)?.[0] || '(нет)');
+  check('form: подсказка перечисляет JPEG/PNG/WebP/GIF и лимит 5 MB', /JPEG, PNG, WebP или GIF до 5 MB/.test(formHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ')), formHtml.match(/Два способа[\s\S]{0,220}/)?.[0]?.replace(/<[^>]+>/g, '') || '(нет)');
   check('form: кнопка «Загрузить файл» на месте', formHtml.includes('Загрузить файл'));
   check('form: поле пути к файлу репозитория осталось', formHtml.includes('/media/covers/slug.webp'));
-  check('form: подсказка про бакет covers', formHtml.includes('covers'));
+  check('form: подсказка называет бакет title-covers', formHtml.includes('<code>title-covers</code>'));
   check('form: без обложки — понятное пустое состояние, а не битая картинка', formHtml.includes('Обложка не задана'));
   const uploadedFormHtml = renderToString(
     React.createElement(TitleForm, {
@@ -243,12 +266,14 @@ forceDemoMode();
 const serverC = await createServer({ ...DEMO_SERVER_OPTIONS, mode: 'test' });
 try {
   const { titles } = await serverC.ssrLoadModule('/src/data/titles.ts');
-  const { storage } = await serverC.ssrLoadModule('/src/data/storage.ts');
+  const { storage, COVER_BUCKET, uploadErrorMessage } = await serverC.ssrLoadModule('/src/data/storage.ts');
+  const { supabaseStoragePublicUrl } = await serverC.ssrLoadModule('/src/lib/storageUrl.ts');
 
   // ── storage.uploadCover в демо-режиме (Supabase не настроен) ────────────
-  // Canvas в Node нет → грузится исходник, а вместо бакета covers получается
-  // data-URL: тот же контракт, что у страниц глав в демо-режиме. В браузере с
-  // настроенным Supabase здесь будет …/storage/v1/object/public/covers/….
+  // Canvas в Node нет → грузится исходник, а вместо бакета title-covers
+  // получается data-URL: тот же контракт, что у страниц глав в демо-режиме.
+  // В браузере с настроенным Supabase здесь будет
+  // …/storage/v1/object/public/title-covers/{slug}-{time}-{rand}.{ext}.
   const demoPng = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 9, 8, 7, 6]);
   const uploaded = await storage.uploadCover(new File([demoPng], 'cover.png'), { key: 'Тест Тайтл' });
   check(
@@ -261,42 +286,54 @@ try {
     const decoded = Buffer.from(uploaded.url.split(',')[1], 'base64');
     check('upload: data-URL декодируется в исходные байты', decoded.length === demoPng.length && decoded[0] === 137 && decoded[7] === 10);
   }
+  const demoGif = new Uint8Array(Buffer.from('GIF89a\x01\x00\x01\x00\x00\x00\x00'));
+  const uploadedGif = await storage.uploadCover(new File([demoGif], 'cover.gif'), { key: 'gif-title' });
+  check('upload: GIF загружается как image/gif (без перекодировки в WebP)', uploadedGif.url.startsWith('data:image/gif;base64,') && uploadedGif.ext === 'gif', `${uploadedGif.ext} ${uploadedGif.url.slice(0, 30)}`);
   const rejectedUpload = await storage
     .uploadCover(new File([new Uint8Array(Buffer.from('%PDF-1.7'))], 'cover.pdf'))
     .then(() => null, (e) => e.message);
-  check('upload: не-картинка не долетает до Storage', typeof rejectedUpload === 'string' && /JPEG, PNG или WebP/.test(rejectedUpload), String(rejectedUpload));
+  check('upload: не-картинка не долетает до Storage', typeof rejectedUpload === 'string' && /JPEG, PNG, WebP или GIF/.test(rejectedUpload), String(rejectedUpload));
 
   // deleteCover в демо — no-op: ни сети, ни исключения (чистить нечего).
+  // Проверяем и прежний бакет `covers`: такие URL могли остаться в cover_url
+  // до миграции 20, и их удаление не должно ронять сохранение тайтла.
   await storage.deleteCover(uploaded.url);
+  await storage.deleteCover(`${TEST_REF}/storage/v1/object/public/title-covers/old-abc-1.webp`);
+  await storage.deleteCover(`${TEST_REF}/storage/v1/object/public/covers/legacy-abc-1.webp`);
   await storage.deleteCover('/media/covers/x.webp');
   await storage.deleteCover(null);
-  check('delete: демо/no-op не роняет сохранение тайтла', true);
+  check('delete: демо/no-op не роняет сохранение тайтла (включая старый бакет covers)', true);
+  {
+    // Имя бакета, в который реально уходит файл: публичный URL строится из него.
+    check('storage: COVER_BUCKET — title-covers (то же имя, что в миграции 20)', COVER_BUCKET === 'title-covers', COVER_BUCKET);
+    const freshUrl = supabaseStoragePublicUrl(COVER_BUCKET, 'gif-title-abc-123.gif');
+    check('save: загруженная обложка проходит нормализацию + CSP-гейт формы', storageUrlCheck(freshUrl), freshUrl);
+  }
 
-  // Сообщения об ошибках загрузки: для обложек — свои подсказки (миграция 18,
+  // Сообщения об ошибках загрузки: для обложек — свои подсказки (миграция 20,
   // роль admin), для страниц глав — прежние (не регрессировали).
-  const { uploadErrorMessage } = await serverC.ssrLoadModule('/src/data/storage.ts');
-  const noBucket = uploadErrorMessage(new Error('Bucket not found'), 'cover.png', 'covers');
-  check('err: нет бакета covers → подсказка накатить миграцию 18', /00000000000018_title_covers\.sql/.test(noBucket), noBucket);
-  const noRights = uploadErrorMessage(new Error('new row violates row-level security policy'), 'cover.png', 'covers');
-  check('err: RLS на covers → подсказка про роль admin', /admin/i.test(noRights) && /covers/.test(noRights), noRights);
+  const noBucket = uploadErrorMessage(new Error('Bucket not found'), 'cover.png', COVER_BUCKET);
+  check('err: нет бакета title-covers → подсказка накатить миграцию 20', /00000000000020_title_covers_bucket\.sql/.test(noBucket) && /title-covers/.test(noBucket), noBucket);
+  const noRights = uploadErrorMessage(new Error('new row violates row-level security policy'), 'cover.png', COVER_BUCKET);
+  check('err: RLS на title-covers → подсказка про роль admin', /admin/i.test(noRights) && /title-covers/.test(noRights), noRights);
   check(
     'err: страницы глав — прежнее сообщение (без bucket-контекста)',
     uploadErrorMessage(new Error('new row violates row-level security policy'), 'p.webp', 'manga') === 'Нет прав на загрузку в этот тайтл.'
   );
   check(
     'err: сетевой сбой обложки — общий текст с именем файла',
-    uploadErrorMessage(new Error('fetch failed'), 'my-cover.png', 'covers').includes('my-cover.png')
+    uploadErrorMessage(new Error('fetch failed'), 'my-cover.png', COVER_BUCKET).includes('my-cover.png')
   );
 
   // ── Загруженная обложка проходит через data-слой без искажений ──────────
-  const storageCover = 'https://demo-ref.supabase.co/storage/v1/object/public/covers/test-abc-123.webp';
+  const storageCover = 'https://demo-ref.supabase.co/storage/v1/object/public/title-covers/test-abc-123.webp';
   const createdUploaded = await titles.create({
     slug: 'cover-uploaded-e2e',
     title: 'E2E: загруженная обложка',
     cover_url: `  ${storageCover}  `,
     published: true,
   });
-  check('e2e: URL бакета covers сохраняется как есть (только trim)', createdUploaded.cover_url === storageCover, createdUploaded.cover_url || '(null)');
+  check('e2e: URL бакета title-covers сохраняется как есть (только trim)', createdUploaded.cover_url === storageCover, createdUploaded.cover_url || '(null)');
   const listedUploaded = (await titles.listAll()).find((t) => t.slug === 'cover-uploaded-e2e');
   check('e2e: чтение из списка не искажает URL Storage', listedUploaded?.cover_url === storageCover, listedUploaded?.cover_url || '(null)');
   await titles.delete(createdUploaded.id);
