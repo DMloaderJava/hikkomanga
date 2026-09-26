@@ -8,6 +8,7 @@ import { SUPABASE_URL } from '@/integrations/supabase/config';
  *  - собирается публичный URL Supabase Storage из пути бакета (pages/voiceovers);
  *  - нормализуются значения из БД/форм (trim, '' → null, http → https,
  *    относительные пути обложек — без изменений);
+ *  - путь обложки приводится к канонической форме (`normalizeCoverUrl`);
  *  - извлекается путь объекта из публичного URL (для удаления из бакета);
  *  - решается, какой URL CSP продакшена считает допустимым.
  *
@@ -108,6 +109,42 @@ export function normalizeMediaUrl(value: string | null | undefined): string | nu
 }
 
 /**
+ * Путь обложки тайтла (titles.cover_url) → каноническая форма.
+ *
+ * Каноническая форма одна: `/media/covers/{slug}.webp` — файл этого
+ * репозитория (public/media/covers/). Форма раньше отклоняла любую другую
+ * запись того же пути («нельзя опубликовать тайтл»): здесь механически
+ * приводим частые записи к канону, чтобы валидная обложка не блокировалась
+ * из-за опечатки:
+ *  - trim по краям, '' → null;
+ *  - срезается ведущий `./` и ведущий `public/` (путь относительно корня репо);
+ *  - добавляется отсутствующий ведущий `/`:
+ *    `media/covers/x.webp` → `/media/covers/x.webp`;
+ *  - уже абсолютные пути (`/…`) — без изменений.
+ *
+ * Функция НЕ проверяет допустимость: `http(s)://`, `data:`, `blob:` и пути
+ * локального диска (`C:\…`) возвращаются как есть (после trim) — их отклоняет
+ * `isMediaUrlCspAllowed`, а форма показывает конкретную причину. URL страниц
+ * глав и озвучек (Supabase Storage) через эту функцию НЕ гонять — у них своя
+ * семантика, см. `normalizeMediaUrl`.
+ */
+export function normalizeCoverUrl(value: string | null | undefined): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+
+  // URL (http(s):, data:, blob:, прочие схемы) и пути локального диска —
+  // не путь репозитория; не трогаем, чтобы downstream-проверка отклонила
+  // со своим сообщением.
+  if (/^(?:[a-z][a-z0-9+.-]*:|[\\/])/i.test(trimmed)) return trimmed;
+
+  let v = trimmed.replace(/^\.\//, '');
+  v = v.replace(/^public\//, '');
+  if (!v.startsWith('/')) v = `/${v}`;
+  return v;
+}
+
+/**
  * Публичный URL объекта Supabase Storage — собирается ТОЛЬКО здесь.
  * `supabase.storage.from(bucket).getPublicUrl()` не используется в других
  * модулях, чтобы формат URL не зависел от версии SDK.
@@ -139,12 +176,17 @@ export function storagePathFromUrl(
 }
 
 /**
- * Разрешён ли URL CSP продакшена (vercel.json → img-src):
+ * Разрешён ли URL CSP продакшена (vercel.json → img-src) и политике проекта:
  * 'self' (относительные пути), data:, blob:, *.supabase.co, *.supabase.in.
- * Всё остальное (внешние CDN, чужие хостинги) браузер молча не загрузит —
- * такие URL нужно отклонять в форме, а не находить по битым картинкам.
- * Обложки теперь 'self' (/media/covers/), поэтому проверка актуальна как
- * защита от опечаток в ручном пути и от случайных внешних ссылок.
+ *
+ * Нюанс: img-src в vercel.json содержит `https:` — браузер охотно загрузит
+ * картинку с внешнего https-домена. Но внешние ссылки для обложек
+ * НЕ используются ПО ПОЛИТИКЕ ПРОЕКТА: мёртвые домены и хотлинк-защита
+ * молча превращают каталог в «стену битых картинок» (см. SETUP_SUPABASE.md,
+ * «Covers troubleshooting»), поэтому форма их отклоняет — эта функция и есть
+ * источник правды для формы. Для страниц/озвучек (Supabase Storage) хост
+ * должен быть *.supabase.co/.in. http:// отклоняется всегда: это смешанный
+ * контент, его блокирует сам браузер.
  */
 export function isMediaUrlCspAllowed(
   url: string | null | undefined,

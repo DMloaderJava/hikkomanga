@@ -1,6 +1,6 @@
 import type { Title, Chapter, Page, Genre, TitleInput, ChapterInput, PageInput } from './types';
 import { DuplicateChapterError } from './types';
-import { normalizeMediaUrl } from '@/lib/storageUrl';
+import { normalizeCoverUrl } from '@/lib/storageUrl';
 
 /** Локальные демо-медиа лежат в public/media (см. public/media/ATTRIBUTION.md). */
 const asset = (path: string) => `${import.meta.env?.BASE_URL ?? '/'}${path}`;
@@ -250,13 +250,16 @@ class LocalStore {
       .filter(Boolean) as Genre[];
 
     const newTitle: Title = {
-      id: 't-' + Date.now(),
+      // Тот же антиколлизионный суффикс, что у глав/страниц: два тайтла,
+      // созданные в одной миллисекунде, иначе получали бы один и тот же id.
+      id: 't-' + Date.now() + '-' + Math.floor(Math.random() * 1000),
       slug: input.slug,
       title: input.title,
       author: input.author || null,
       description: input.description || null,
-      // Как в Supabase-ветке titles.ts: чистим пробелы/пустоту, http→https.
-      cover_url: normalizeMediaUrl(input.cover_url),
+      // Как в Supabase-ветке titles.ts: путь обложки → канонический
+      // /media/covers/{slug}.webp (trim, ведущий /, '' → null).
+      cover_url: normalizeCoverUrl(input.cover_url),
       status: input.status || 'ongoing',
       published: input.published ?? false,
       created_at: new Date().toISOString(),
@@ -284,7 +287,7 @@ class LocalStore {
       author: input.author !== undefined ? input.author : current.author,
       description: input.description !== undefined ? input.description : current.description,
       cover_url:
-        input.cover_url !== undefined ? normalizeMediaUrl(input.cover_url) : current.cover_url,
+        input.cover_url !== undefined ? normalizeCoverUrl(input.cover_url) : current.cover_url,
       status: input.status !== undefined ? input.status : current.status,
       published: input.published !== undefined ? input.published : current.published,
       genres: genreObjects,
