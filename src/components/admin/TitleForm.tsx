@@ -1,14 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import type { Title, Genre, TitleInput } from '@/data/types';
 import { slugify } from '@/lib/slugify';
-import { isMediaUrlCspAllowed, normalizeMediaUrl } from '@/lib/storageUrl';
+import { isMediaUrlCspAllowed, isSupabaseStorageUrl, normalizeMediaUrl } from '@/lib/storageUrl';
+import { COVER_ACCEPT, COVER_ACCEPT_EXT, COVER_MAX_BYTES } from '@/lib/coverUpload';
 import { CoverImage } from '@/components/manga/CoverImage';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { Plus, Lock, Image as ImageIcon, RotateCcw, Trash2 } from 'lucide-react';
+import { Plus, Lock, Image as ImageIcon, RotateCcw, Trash2, Upload, Loader2 } from 'lucide-react';
 
 interface TitleFormProps {
   initialData?: Title | null;
@@ -43,6 +44,17 @@ export function TitleForm({
   const [error, setError] = useState<string | null>(null);
   const [hasDraft, setHasDraft] = useState(false);
 
+  // ── Загрузка обложки из файла ──────────────────────────────────────────────
+  const coverInputRef = useRef<HTMLInputElement>(null);
+  /** Обложки, загруженные в ЭТОЙ сессии формы: чистим сирот после сохранения. */
+  const uploadedCoversRef = useRef<string[]>([]);
+  /** Обложка, сохранённая в БД до открытия формы (её тоже надо почистить). */
+  const savedCoverRef = useRef<string | null>(initialData?.cover_url ?? null);
+  const [coverUploading, setCoverUploading] = useState(false);
+  const [coverError, setCoverError] = useState<string | null>(null);
+  const [coverNote, setCoverNote] = useState<string | null>(null);
+  const [coverDragOver, setCoverDragOver] = useState(false);
+
   // Check for saved draft on mount
   useEffect(() => {
     try {
@@ -67,7 +79,10 @@ export function TitleForm({
         slug,
         author,
         description,
-        coverUrl,
+        // data-URL (демо-загрузка без Supabase) в черновик не кладём: это
+        // 100+ kB base64 на каждый чих, а localStorage один на всю админку.
+        // Загруженная в Storage обложка — обычный URL, сохраняется как есть.
+        coverUrl: coverUrl.startsWith('data:') ? '' : coverUrl,
         status,
         published,
         selectedGenreIds,
@@ -129,6 +144,76 @@ export function TitleForm({
     }
   };
 
+  /**
+   * Загрузить обложку из файла: валидация по байтам → WebP ≤800 px → бакет
+   * `covers` (или data-URL в демо-режиме). URL сразу попадает в поле cover_url,
+   * но в БД окажется только после «Сохранить» — до этого момента файл просто
+   * лежит в Storage, а при сохранении сироты удаляются (cleanupStaleCovers).
+   */
+  const handleCoverFile = async (file: File | null | undefined) => {
+    // Тот же файл можно выбрать повторно → сбрасываем value сразу.
+    if (coverInputRef.current) coverInputRef.current.value = '';
+    if (!file) return;
+    setCoverError(null);
+    setCoverNote(null);
+    setCoverUploading(true);
+    try {
+      const { storage } = await import('@/data/storage');
+      const { url, compressed, bytes } = await storage.uploadCover(file, { key: slug || title });
+      uploadedCoversRef.current.push(url);
+      setCoverUrl(url);
+      setCoverNote(
+        compressed
+          ? `Загружено: WebP, ${(bytes / 1024).toFixed(0)} kB. Сохраните тайтл, чтобы обложка закрепилась.`
+          : `Загружен исходник (${(bytes / 1024).toFixed(0)} kB): браузер не умеет кодировать WebP.`
+      );
+    } catch (err) {
+      setCoverError(err instanceof Error ? err.message : 'Не удалось загрузить обложку');
+    } finally {
+      setCoverUploading(false);
+    }
+  };
+
+  const handleCoverDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setCoverDragOver(false);
+    if (coverUploading) return;
+    void handleCoverFile(e.dataTransfer.files?.[0]);
+  };
+
+  /**
+   * После успешного сохранения удалить из бакета то, что больше не нужно:
+   * промежуточные загрузки этой сессии и прежнюю загруженную обложку.
+   *
+   * Удаляем ТОЛЬКО объекты Storage, которых нет ни в одном тайтле: URL могли
+   * скопировать в другую карточку, а файлов репозитория и data-URL мы не
+   * касаемся вовсе (isSupabaseStorageUrl → deleteCover → no-op).
+   */
+  const cleanupStaleCovers = (keptUrl: string | null) => {
+    const candidates = new Set(uploadedCoversRef.current.filter((url) => url !== keptUrl));
+    const previous = savedCoverRef.current;
+    if (previous && previous !== keptUrl) candidates.add(previous);
+    const stale = [...candidates].filter((url) => isSupabaseStorageUrl(url));
+    if (stale.length === 0) return;
+
+    void (async () => {
+      try {
+        const [{ titles }, { storage }] = await Promise.all([
+          import('@/data/titles'),
+          import('@/data/storage'),
+        ]);
+        const inUse = new Set(
+          (await titles.listAll()).map((t) => t.cover_url).filter((u): u is string => !!u)
+        );
+        for (const url of stale) {
+          if (!inUse.has(url)) await storage.deleteCover(url);
+        }
+      } catch (e) {
+        console.error('[covers] очистка старых обложек не удалась:', e);
+      }
+    })();
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -143,16 +228,22 @@ export function TitleForm({
       return;
     }
 
+    if (coverUploading) {
+      setError('Обложка ещё загружается — дождитесь окончания или уберите файл');
+      return;
+    }
+
     // Обложка: нормализуем (trim, '' → null) и отклоняем то, что продовый CSP
     // заведомо не пропустит (внешние домены, http://) — иначе админ сохранит
-    // тайтл и только потом обнаружит битую картинку. Обложки — файлы
-    // репозитория: /media/covers/{slug}.webp; относительные пути проходят.
+    // тайтл и только потом обнаружит битую картинку. Допустимы два вида:
+    //   • файл репозитория — /media/covers/{slug}.webp (public/media/covers/);
+    //   • загрузка из этой формы — https://<ref>.supabase.co/storage/v1/object/public/covers/…
     const normalizedCover = normalizeMediaUrl(coverUrl);
     if (normalizedCover && !isMediaUrlCspAllowed(normalizedCover)) {
       setError(
         'Допустим только путь к файлу репозитория вида /media/covers/slug.webp ' +
-          '(внешние домены и http:// CSP блокирует). Положите WebP-файл в ' +
-          'public/media/covers/ и укажите его путь здесь.'
+          'или обложка, загруженная кнопкой «Загрузить файл» (внешние домены и ' +
+          'http:// CSP блокирует).'
       );
       return;
     }
@@ -169,10 +260,19 @@ export function TitleForm({
         genre_ids: selectedGenreIds,
       });
       localStorage.removeItem(draftStorageKey);
+      cleanupStaleCovers(normalizedCover);
     } catch (err: any) {
       setError(err.message || 'Ошибка сохранения тайтла');
     }
   };
+
+  const coverKindLabel = !coverUrl
+    ? null
+    : isSupabaseStorageUrl(coverUrl)
+      ? 'загружена в Storage (бакет covers)'
+      : coverUrl.startsWith('data:')
+        ? 'демо-режим (data-URL)'
+        : 'файл репозитория';
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
@@ -194,7 +294,7 @@ export function TitleForm({
               variant="ghost"
               size="sm"
               onClick={handleDiscardDraft}
-              className="h-7 text-xs text-amber-400 hover:text-amber-200"
+              className="h-7 text-xs gap-1 text-amber-400 hover:text-amber-200"
             >
               <Trash2 className="h-3.5 w-3.5" /> Сбросить
             </Button>
@@ -209,21 +309,94 @@ export function TitleForm({
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* Left Column: Cover — путь к файлу в репозитории (public/media/covers/) */}
-        <div className="space-y-4">
-          <Label>Обложка тайтла</Label>
-          <div className="relative aspect-[3/4] w-full rounded-xl border-2 border-dashed border-neutral-800 bg-neutral-900/50 flex flex-col items-center justify-center overflow-hidden">
+        {/* Left Column: Cover — загрузка файла ИЛИ путь к файлу в репозитории */}
+        <div className="space-y-3">
+          <div className="flex items-baseline justify-between gap-2">
+            <Label>Обложка тайтла</Label>
+            {coverKindLabel && (
+              <span className="text-[11px] text-neutral-500">{coverKindLabel}</span>
+            )}
+          </div>
+
+          <div
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (!coverUploading) setCoverDragOver(true);
+            }}
+            onDragLeave={() => setCoverDragOver(false)}
+            onDrop={handleCoverDrop}
+            className={`relative aspect-[3/4] w-full rounded-xl border-2 border-dashed bg-neutral-900/50 flex flex-col items-center justify-center overflow-hidden transition-colors ${
+              coverDragOver ? 'border-rose-500 bg-rose-950/20' : 'border-neutral-800'
+            }`}
+          >
             {coverUrl ? (
               <CoverImage src={coverUrl} title={title || 'Тайтл'} className="h-full w-full object-cover" />
             ) : (
               <div className="flex flex-col items-center gap-2 p-6 text-center">
                 <ImageIcon className="h-10 w-10 text-neutral-600" />
                 <span className="text-xs font-medium text-neutral-400">
-                  Путь к обложке не указан — будет плейсхолдер
+                  Обложка не задана — будет плейсхолдер
+                </span>
+                <span className="text-[11px] text-neutral-600">
+                  Перетащите файл сюда или нажмите «Загрузить файл»
                 </span>
               </div>
             )}
+
+            {coverUploading && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-neutral-950/80 text-xs text-neutral-200">
+                <Loader2 className="h-6 w-6 animate-spin text-rose-400" />
+                Загрузка обложки…
+              </div>
+            )}
           </div>
+
+          <input
+            ref={coverInputRef}
+            type="file"
+            accept={COVER_ACCEPT}
+            className="hidden"
+            aria-label="Файл обложки тайтла"
+            onChange={(e) => void handleCoverFile(e.target.files?.[0])}
+          />
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => coverInputRef.current?.click()}
+              disabled={coverUploading}
+              className="h-8 gap-1.5 text-xs border-neutral-800"
+            >
+              {coverUploading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Upload className="h-3.5 w-3.5" />
+              )}
+              {coverUploading ? 'Загрузка…' : 'Загрузить файл'}
+            </Button>
+            {coverUrl && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setCoverUrl('');
+                  setCoverError(null);
+                  setCoverNote(null);
+                }}
+                disabled={coverUploading}
+                className="h-8 gap-1.5 text-xs text-neutral-400 hover:text-neutral-200"
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Убрать
+              </Button>
+            )}
+          </div>
+
+          {coverError && <p className="text-[11px] text-red-400">{coverError}</p>}
+          {coverNote && !coverError && <p className="text-[11px] text-neutral-500">{coverNote}</p>}
+
           <Input
             type="text"
             placeholder="/media/covers/slug.webp"
@@ -232,10 +405,12 @@ export function TitleForm({
             className="text-xs"
           />
           <p className="text-[11px] leading-snug text-neutral-500">
-            Обложки — файлы репозитория: положите WebP (≤800 px по ширине) в{' '}
-            <code>public/media/covers/</code> и укажите путь вида{' '}
-            <code>/media/covers/{'{slug}'}.webp</code>. Если файла нет — превью и сайт
-            покажут плейсхолдер, а dev-консоль объяснит, какой путь не нашёлся.
+            Два способа. <b>Загрузить файл</b>: JPEG/PNG/WebP до{' '}
+            {Math.round(COVER_MAX_BYTES / 1024 / 1024)} MB ({COVER_ACCEPT_EXT}) — картинка сожмётся в
+            WebP ≤800 px и уйдёт в бакет <code>covers</code>. <b>Файл репозитория</b>: положите WebP
+            в <code>public/media/covers/</code> и укажите путь{' '}
+            <code>/media/covers/{'{slug}'}.webp</code>. Если файла нет — превью и сайт покажут
+            плейсхолдер, а dev-консоль объяснит, какой путь не нашёлся.
           </p>
         </div>
 

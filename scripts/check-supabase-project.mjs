@@ -130,6 +130,8 @@ const EXPECTED_BUCKETS = [
   ['manga', '00000000000002_storage_buckets.sql'],
   ['hikko-originals', '00000000000002_storage_buckets.sql'],
   ['voiceovers', '00000000000001_voiceovers.sql'],
+  // Обложки, загруженные из админки (TitleForm) — публичный бакет.
+  ['covers', '00000000000018_title_covers.sql'],
 ];
 
 // ── HTTP-помощник ───────────────────────────────────────────────────────────

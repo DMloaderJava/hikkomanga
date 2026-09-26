@@ -9,21 +9,27 @@
  *   --timeout ms  таймаут запроса списка (по умолчанию 10000)
  *   --json        вывести итог JSON-ом (для CI)
  *
- * Обложки — файлы репозитория (public/media/covers/), в titles.cover_url —
- * относительный путь вида /media/covers/{slug}.webp. Сети нет: для каждого
- * cover_url из БД проверяется, что:
- *   1) путь относительный (начинается с /) — внешние/http(s) URL больше не
- *      поддерживаются и помечаются проблемой;
- *   2) файл существует в public/<путь>;
- *   3) формат — WebP (расширение .webp).
+ * Обложка тайтла бывает двух видов (форму задаёт TitleForm):
+ *   A) ФАЙЛ РЕПОЗИТОРИЯ — относительный путь /media/covers/{slug}.webp.
+ *      Сети нет: проверяется, что путь относительный, это .webp и файл
+ *      реально лежит в public/<путь>.
+ *   B) ЗАГРУЗКА ИЗ АДМИНКИ — публичный URL бакета `covers`
+ *      (…/storage/v1/object/public/covers/{slug}-{time}.webp). Здесь нужен
+ *      один HEAD-запрос на обложку: 200 — картинка живая, 4xx — объект
+ *      удалён/не докачался, а cover_url на него всё ещё ссылается.
+ *
+ * Всё остальное (внешние CDN, http://, data-URL) — проблема: CSP `img-src`
+ * пропускает только 'self', data:, blob: и *.supabase.co, так что такая
+ * обложка в каталоге молча превратится в плейсхолдер.
  *
  * Переменные те же, что при сборке: .env / .env.production + process.env
  * (VITE_SUPABASE_URL + ключ). RLS отдаёт только опубликованные тайтлы —
  * именно их видят читатели.
  *
  * Коды выхода:
- *   0 — все обложки найдены в public/;
- *   1 — есть битые (файла нет / путь не относительный / не .webp / пусто);
+ *   0 — все обложки на месте (файлы в public/ отвечают, URL доступны);
+ *   1 — есть битые (файла нет / путь не относительный / не .webp / пусто /
+ *       URL в Storage отдаёт не 200);
  *   2 — сама БД недоступна (переменные не заданы или сеть/RLS).
  */
 import fs from 'node:fs';
@@ -53,7 +59,22 @@ const anonKey =
   '';
 
 const result = { checked: 0, ok: 0, problems: [], items: [] };
-const checkCoverPath = (urlValue) => {
+
+/** Публичный URL объекта бакета `covers` — обложка, загруженная из админки. */
+const isStorageCoverUrl = (value) =>
+  /^https?:\/\//i.test(value) && value.includes('/storage/v1/object/public/covers/');
+
+/** HEAD-запрос к Storage: 200 — объект жив, 0 — сети нет. */
+async function headStatus(url) {
+  try {
+    const res = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(TIMEOUT_MS) });
+    return { status: res.status };
+  } catch (e) {
+    return { status: 0, error: e?.message || String(e) };
+  }
+}
+
+const checkCoverPath = async (urlValue) => {
   result.checked += 1;
   const value = typeof urlValue === 'string' ? urlValue.trim() : '';
 
@@ -67,10 +88,30 @@ const checkCoverPath = (urlValue) => {
   };
 
   if (!value) return problem('EMPTY', 'обложка не задана — будет плейсхолдер');
+
+  // ── B. Загруженная обложка: HEAD-запрос в бакет covers ──
+  if (isStorageCoverUrl(value)) {
+    const { status, error } = await headStatus(value);
+    if (status === 200) return fine();
+    if (status === 0) {
+      return problem('NET', `Storage не отвечает (${error || 'нет соединения'}) — обложка не проверена`);
+    }
+    return problem(
+      `HTTP_${status}`,
+      'объекта нет в бакете covers (удалён или не докачался) — загрузите обложку заново в TitleForm'
+    );
+  }
+
+  // data-URL бывает только в демо-режиме (mockStore/localStorage), в БД ему не место.
+  if (value.startsWith('data:')) {
+    return problem('DATA_URL', 'data-URL в БД не поддерживается: загрузите файл (бакет covers) или укажите путь в public/');
+  }
+
+  // ── A. Файл репозитория ──
   if (!value.startsWith('/')) {
     return problem(
       /^https?:\/\//i.test(value) ? 'EXTERNAL' : 'MALFORMED',
-      'обложки хранятся в репозитории: путь должен начинаться с / (например /media/covers/slug.webp)'
+      'допустимы путь /media/covers/{имя}.webp или обложка, загруженная в бакет covers (внешние домены режет CSP)'
     );
   }
   if (!value.toLowerCase().endsWith('.webp')) {
@@ -129,7 +170,7 @@ if (!AS_JSON) {
 
 for (const t of titles) {
   const before = result.problems.length;
-  checkCoverPath(t.cover_url);
+  await checkCoverPath(t.cover_url);
   const last = result.problems[result.problems.length - 1];
   const bad = result.problems.length > before;
   if (!AS_JSON) {
@@ -161,14 +202,15 @@ if (AS_JSON) {
   console.log(JSON.stringify(result, null, 2));
 } else {
   console.log(
-    `\nИтог: проверено ${result.checked}, найдено в public/ ${result.ok}, проблем ${result.problems.length}.`
+    `\nИтог: проверено ${result.checked}, доступно ${result.ok}, проблем ${result.problems.length}.`
   );
   if (result.problems.length) {
     console.log('\nПроблемы:');
     for (const p of result.problems) console.log(`  [${p.verdict}] ${p.url} — ${p.note}`);
     console.log(
-      '\nЧинится так: положите WebP-файл в public/media/covers/ и укажите путь ' +
-        '/media/covers/{имя}.webp в админке (TitleForm). Сгенерировать сид-обложки: ' +
+      '\nЧинится так: в админке (TitleForm) нажмите «Загрузить файл» — обложка уйдёт ' +
+        'в бакет covers, — либо положите WebP в public/media/covers/ и укажите путь ' +
+        '/media/covers/{имя}.webp. Сгенерировать сид-обложки: ' +
         'npm i --no-save sharp && node scripts/generate-seed-covers.mjs'
     );
   }
