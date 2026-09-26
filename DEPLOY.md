@@ -29,6 +29,7 @@ SQL Editor → выполнить по порядку:
 - `supabase/migrations/00000000000014_new_title_trigger.sql`
 - `supabase/migrations/00000000000015_chapter_submissions.sql` (заявки на главы)
 - `supabase/migrations/00000000000017_user_api_keys.sql` (персональные Gemini-ключи)
+- `supabase/migrations/00000000000018_publish_title.sql` (публикация тайтла, если переключатель не сохраняет `published`)
 
 Отдельно, если `npm run check:supabase` показывает ✗ у бакета: выполнить
 `insert` из `00000000000002_storage_buckets.sql` (создаёт `manga` и
@@ -44,6 +45,7 @@ supabase db query --linked -f supabase/migrations/00000000000013_submissions_cle
 supabase db query --linked -f supabase/migrations/00000000000014_new_title_trigger.sql
 supabase db query --linked -f supabase/migrations/00000000000015_chapter_submissions.sql
 supabase db query --linked -f supabase/migrations/00000000000017_user_api_keys.sql
+supabase db query --linked -f supabase/migrations/00000000000018_publish_title.sql
 ```
 
 > ⚠️ **`supabase db push` на этом проекте не работает.** Локальная история

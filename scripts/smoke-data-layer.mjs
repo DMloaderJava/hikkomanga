@@ -43,6 +43,19 @@ try {
   // Создание тайтла + конфликт slug
   const created = await titles.create({ title: 'Тест', slug: 'test-slug', genre_ids: [] });
   check('create вернул тайтл с id', Boolean(created.id));
+  check('новый тайтл без published — черновик', created.published === false);
+  const published = await titles.setPublished(created.id, true);
+  check('setPublished(true) ставит тайтл в каталог', published.published === true);
+  check(
+    'опубликованный тайтл виден в listPublished',
+    (await titles.listPublished()).some((t) => t.id === created.id)
+  );
+  const draftAgain = await titles.setPublished(created.id, false);
+  check('setPublished(false) снова прячет тайтл', draftAgain.published === false);
+  check(
+    'черновик не попадает в listPublished',
+    !(await titles.listPublished()).some((t) => t.id === created.id)
+  );
   let caught = null;
   try {
     await titles.create({ title: 'Тест 2', slug: 'test-slug', genre_ids: [] });

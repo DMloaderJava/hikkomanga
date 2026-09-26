@@ -4,6 +4,7 @@ import { titles as titlesApi } from '@/data/titles';
 import { chapters as chaptersApi } from '@/data/chapters';
 import { pages as pagesApi } from '@/data/pages';
 import { ChapterForm } from '@/components/admin/ChapterForm';
+import { PublishTitleBanner } from '@/components/admin/PublishTitleBanner';
 import { PageUploader } from '@/components/admin/PageUploader';
 import { PageSortList } from '@/components/admin/PageSortList';
 import { VoiceoverPanel } from '@/components/admin/VoiceoverPanel';
@@ -106,9 +107,12 @@ function AdminChapterPagesPage() {
           </h1>
           <p className="text-xs text-neutral-400 mt-0.5">
             Тайтл: «{title.title}»
+            {title.published ? '' : ' · черновик, читатели его не видят'}
           </p>
         </div>
       </div>
+
+      <PublishTitleBanner title={title} />
 
       {error && (
         <div className="flex items-center gap-2 rounded-xl border border-red-800/80 bg-red-950/40 p-3 text-sm text-red-400">
