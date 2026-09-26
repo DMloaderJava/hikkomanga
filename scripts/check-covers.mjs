@@ -13,8 +13,10 @@
  *   A) ФАЙЛ РЕПОЗИТОРИЯ — относительный путь /media/covers/{slug}.webp.
  *      Сети нет: проверяется, что путь относительный, это .webp и файл
  *      реально лежит в public/<путь>.
- *   B) ЗАГРУЗКА ИЗ АДМИНКИ — публичный URL бакета `covers`
- *      (…/storage/v1/object/public/covers/{slug}-{time}.webp). Здесь нужен
+ *   B) ЗАГРУЗКА ИЗ АДМИНКИ — публичный URL бакета `title-covers`
+ *      (…/storage/v1/object/public/title-covers/{slug}-{time}.webp; старый
+ *      бакет `covers` тоже распознаётся — такие cover_url ещё могут быть в БД).
+ *      Здесь нужен
  *      один HEAD-запрос на обложку: 200 — картинка живая, 4xx — объект
  *      удалён/не докачался, а cover_url на него всё ещё ссылается.
  *
@@ -60,9 +62,14 @@ const anonKey =
 
 const result = { checked: 0, ok: 0, problems: [], items: [] };
 
-/** Публичный URL объекта бакета `covers` — обложка, загруженная из админки. */
+/**
+ * Публичный URL объекта бакета обложек — обложка, загруженная из админки.
+ * Прежнее имя бакета (`covers`, миграция 19) тоже признаётся: в старых
+ * cover_url могли остаться такие ссылки, и их надо проверять, а не
+ * объявлять «внешним доменом».
+ */
 const isStorageCoverUrl = (value) =>
-  /^https?:\/\//i.test(value) && value.includes('/storage/v1/object/public/covers/');
+  /^https?:\/\//i.test(value) && /\/storage\/v1\/object\/public\/(?:title-)?covers\//.test(value);
 
 /** HEAD-запрос к Storage: 200 — объект жив, 0 — сети нет. */
 async function headStatus(url) {
@@ -98,20 +105,20 @@ const checkCoverPath = async (urlValue) => {
     }
     return problem(
       `HTTP_${status}`,
-      'объекта нет в бакете covers (удалён или не докачался) — загрузите обложку заново в TitleForm'
+      'объекта нет в бакете title-covers (удалён или не докачался) — загрузите обложку заново в TitleForm'
     );
   }
 
   // data-URL бывает только в демо-режиме (mockStore/localStorage), в БД ему не место.
   if (value.startsWith('data:')) {
-    return problem('DATA_URL', 'data-URL в БД не поддерживается: загрузите файл (бакет covers) или укажите путь в public/');
+    return problem('DATA_URL', 'data-URL в БД не поддерживается: загрузите файл (бакет title-covers) или укажите путь в public/');
   }
 
   // ── A. Файл репозитория ──
   if (!value.startsWith('/')) {
     return problem(
       /^https?:\/\//i.test(value) ? 'EXTERNAL' : 'MALFORMED',
-      'допустимы путь /media/covers/{имя}.webp или обложка, загруженная в бакет covers (внешние домены режет CSP)'
+      'допустимы путь /media/covers/{имя}.webp или обложка, загруженная в бакет title-covers (внешние домены режет CSP)'
     );
   }
   if (!value.toLowerCase().endsWith('.webp')) {
@@ -209,7 +216,7 @@ if (AS_JSON) {
     for (const p of result.problems) console.log(`  [${p.verdict}] ${p.url} — ${p.note}`);
     console.log(
       '\nЧинится так: в админке (TitleForm) нажмите «Загрузить файл» — обложка уйдёт ' +
-        'в бакет covers, — либо положите WebP в public/media/covers/ и укажите путь ' +
+        'в бакет title-covers, — либо положите WebP в public/media/covers/ и укажите путь ' +
         '/media/covers/{имя}.webp. Сгенерировать сид-обложки: ' +
         'npm i --no-save sharp && node scripts/generate-seed-covers.mjs'
     );

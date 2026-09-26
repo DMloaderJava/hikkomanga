@@ -24,6 +24,19 @@ async function blobToDataUrl(blob: Blob): Promise<string> {
   return `data:${blob.type || 'application/octet-stream'};base64,${btoa(binary)}`;
 }
 
+/**
+ * Публичный бакет обложек тайтлов, загруженных из админки.
+ *
+ * Имя — `title-covers` (миграция 00000000000020_title_covers_bucket.sql).
+ * Прежнее имя `covers` (миграция 19) осталось только в LEGACY_COVER_BUCKETS:
+ * старые cover_url могут указывать туда, и такие объекты мы всё ещё умеем
+ * удалять при замене обложки.
+ */
+export const COVER_BUCKET = 'title-covers';
+
+/** Прежние имена бакета обложек — только для удаления устаревших объектов. */
+const LEGACY_COVER_BUCKETS = ['covers'];
+
 export function uploadErrorMessage(error: unknown, name: string, bucket?: string): string {
   const e = error as {message?: string; statusCode?: string | number; name?: string};
   if (e?.name === 'AbortError') return 'Загрузка отменена. Уже загруженные страницы сохранены.';
@@ -31,13 +44,13 @@ export function uploadErrorMessage(error: unknown, name: string, bucket?: string
   // Бакета нет (проект пересоздавали, миграцию не накатили) — самая частая
   // причина «загрузка падает, а всё остальное работает».
   if (/bucket not found|nosuchbucket|bucket_id/i.test(message)) {
-    return bucket === 'covers'
-      ? 'Бакет `covers` не создан — накатите supabase/migrations/00000000000018_title_covers.sql. Альтернатива: положите WebP в public/media/covers/ и укажите путь.'
+    return bucket === COVER_BUCKET
+      ? `Бакет \`${COVER_BUCKET}\` не создан — накатите supabase/migrations/00000000000020_title_covers_bucket.sql. Альтернатива: положите WebP в public/media/covers/ и укажите путь.`
       : `Бакет \`${bucket || 'storage'}\` не создан — см. SETUP_SUPABASE.md §2.`;
   }
   if (/row.level|policy|permission|unauthorized|forbidden|нет прав/i.test(message) || ['401','403'].includes(String(e?.statusCode))) {
-    return bucket === 'covers'
-      ? 'Нет прав на загрузку обложек: нужен вход под ролью admin и политика «admin write covers» (миграция 00000000000018).'
+    return bucket === COVER_BUCKET
+      ? `Нет прав на загрузку обложек: нужен вход под ролью admin и политика «admin write ${COVER_BUCKET}» (миграция 00000000000020).`
       : 'Нет прав на загрузку в этот тайтл.';
   }
   if (/quota|storage.*full|insufficient.*storage|capacity/i.test(message) || String(e?.statusCode) === '507') return 'Не хватает места в Storage. Освободите или обратитесь к администратору.';
@@ -49,7 +62,7 @@ export function uploadErrorMessage(error: unknown, name: string, bucket?: string
  * анонимный посетитель), из приватных — голый путь объекта (его открывает
  * только владелец через подписанный URL).
  */
-const PUBLIC_BUCKETS = new Set(['manga', 'covers']);
+const PUBLIC_BUCKETS = new Set(['manga', COVER_BUCKET]);
 
 async function uploadBlob(bucket: string, path: string, blob: Blob, name: string): Promise<string> {
   if (!isSupabaseConfigured) return blobToDataUrl(blob);
@@ -64,17 +77,19 @@ async function uploadBlob(bucket: string, path: string, blob: Blob, name: string
 /**
  * Storage для пользовательского контента: страницы глав (бакеты manga +
  * hikko-originals), озвучки (voiceovers) и загруженные из админки обложки
- * тайтлов (бакет covers).
+ * тайтлов (бакет title-covers).
  *
  * Обложка тайтла живёт в двух видах, форма (TitleForm) принимает оба:
  *  1. ФАЙЛ РЕПОЗИТОРИЯ — public/media/covers/{имя}.webp, в titles.cover_url
  *     относительный путь `/media/covers/{имя}.webp`. Штатно для сидов и
  *     «вечных» картинок: файл в git, кэш 'self', вес ограничен бюджетом
  *     (scripts/check-budgets.mjs), Storage не нужен вовсе.
- *  2. ЗАГРУЗКА ИЗ АДМИНКИ — storage.uploadCover() жмёт файл в WebP ≤800 px
- *     и кладёт в публичный бакет `covers` (миграция
- *     00000000000018_title_covers.sql), в titles.cover_url — публичный URL
- *     `…/storage/v1/object/public/covers/…`. Без Supabase (демо) — data-URL.
+ *  2. ЗАГРУЗКА ИЗ АДМИНКИ — storage.uploadCover() принимает JPEG/PNG/WebP/GIF,
+ *     жмёт в WebP ≤800 px (GIF — как есть, с анимацией) и кладёт в публичный
+ *     бакет `title-covers` (миграция
+ *     00000000000020_title_covers_bucket.sql), в titles.cover_url —
+ *     публичный URL `…/storage/v1/object/public/title-covers/…`.
+ *     Без Supabase (демо) — data-URL.
  *
  * Оба вида рендерит CoverImage, оба проходят CSP (`'self'` и `*.supabase.co`)
  * и проверку isMediaUrlCspAllowed; различает их isSupabaseStorageUrl().
@@ -152,25 +167,26 @@ export const storage = {
   /**
    * Загрузить обложку тайтла (TitleForm → «Загрузить файл»).
    *
-   * Файл приводится к WebP ≤800 px (src/lib/coverUpload.ts) и кладётся в
-   * публичный бакет `covers` под именем `{slug}-{time}-{rand}.webp`.
-   * Возвращается то, что пишется в titles.cover_url: публичный URL Storage
-   * или data-URL в демо-режиме.
+   * Файл (JPEG/PNG/WebP/GIF) приводится к WebP ≤800 px (GIF — как есть,
+   * с анимацией) в src/lib/coverUpload.ts и кладётся в публичный бакет
+   * `title-covers` под именем `{slug}-{time}-{rand}.{ext}`. Возвращается то,
+   * что пишется в titles.cover_url: публичный URL Storage или data-URL в
+   * демо-режиме.
    *
    * `key` — slug тайтла (только для читаемого имени объекта; до сохранения
    * нового тайтла slug может быть пустым — тогда будет `cover-…`).
    */
-  async uploadCover(file: File, opts?: { key?: string | null }): Promise<{ url: string; compressed: boolean; bytes: number }> {
+  async uploadCover(file: File, opts?: { key?: string | null }): Promise<{ url: string; compressed: boolean; bytes: number; ext: string }> {
     const { prepareCoverImage, coverObjectPath } = await import('@/lib/coverUpload');
-    const { blob, compressed } = await prepareCoverImage(file);
-    const ext = blob.type === 'image/png' ? 'png' : blob.type === 'image/jpeg' ? 'jpg' : 'webp';
+    const { blob, compressed, ext } = await prepareCoverImage(file);
     const path = coverObjectPath(opts?.key, ext);
-    const url = await uploadBlob('covers', path, blob, file.name);
-    return { url, compressed, bytes: blob.size };
+    const url = await uploadBlob(COVER_BUCKET, path, blob, file.name);
+    return { url, compressed, bytes: blob.size, ext };
   },
 
   /**
-   * Удалить загруженную обложку из бакета `covers`.
+   * Удалить загруженную обложку из бакета `title-covers` (или из прежнего
+   * `covers` — такие URL могли остаться в cover_url до миграции 20).
    *
    * Безопасный no-op для всего, что бакету не принадлежит: относительный путь
    * файла репозитория, data-URL демо-режима, чужой домен. Вызывается из
@@ -181,13 +197,16 @@ export const storage = {
     if (!isSupabaseConfigured || !isSupabaseStorageUrl(url)) return;
     try {
       const supabase = await getSupabase();
-      const path = storagePathFromUrl(url, 'covers');
-      if (!path) return;
-      const { error } = await supabase.storage.from('covers').remove([path]);
-      if (error) throw error;
+      for (const bucket of [COVER_BUCKET, ...LEGACY_COVER_BUCKETS]) {
+        const path = storagePathFromUrl(url, bucket);
+        if (!path) continue;
+        const { error } = await supabase.storage.from(bucket).remove([path]);
+        if (error) throw error;
+        return;
+      }
     } catch (e) {
       // Не роняем сохранение тайтла из-за мусора в Storage: файл останется,
-      // это ~100 kB, удалить можно руками в Storage → covers.
+      // это ~100 kB, удалить можно руками в Storage → title-covers.
       console.error('[covers] не удалось удалить старую обложку из Storage:', e);
     }
   },
