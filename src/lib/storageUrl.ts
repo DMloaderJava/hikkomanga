@@ -11,8 +11,11 @@ import { SUPABASE_URL } from '@/integrations/supabase/config';
  *  - извлекается путь объекта из публичного URL (для удаления из бакета);
  *  - решается, какой URL CSP продакшена считает допустимым.
  *
- * Обложки тайтлов — НЕ Storage: это файлы репозитория (public/media/covers/),
- * в titles.cover_url лежит относительный путь /media/covers/{slug}.webp.
+ * Обложки тайтлов бывают двух видов: файл репозитория (public/media/covers/,
+ * в titles.cover_url относительный путь /media/covers/{slug}.webp) и объект
+ * публичного бакета Storage `covers` (загрузка из админки — TitleForm).
+ * Различает их isSupabaseStorageUrl(); нормализация и CSP-проверка ниже
+ * корректны для обоих.
  *
  * Разброс этой логики по модулям — проверенный способ получить «каталог без
  * картинок» после переезда Supabase-проекта: см. SETUP_SUPABASE.md,
@@ -136,6 +139,32 @@ export function storagePathFromUrl(
   const idx = url.indexOf(marker);
   if (idx < 0) return null;
   return url.slice(idx + marker.length).split('?')[0];
+}
+
+/**
+ * Это публичный URL объекта Supabase Storage (а не файл репозитория и не
+ * data-URL)? Именно так отличают «обложку загрузили из админки» (бакет
+ * `covers`, URL вида `…/storage/v1/object/public/covers/…`) от «обложка —
+ * файл репозитория» (`/media/covers/{имя}.webp`).
+ *
+ * Нужно, чтобы:
+ *  - TitleForm показывал, откуда взялась текущая обложка;
+ *  - замена загруженной обложки удаляла старый объект из бакета
+ *    (storage.deleteCover), а файл репозитория при этом не трогался;
+ *  - check-covers.mjs проверял такие обложки HTTP-запросом, а не поиском
+ *    файла в public/.
+ */
+export function isSupabaseStorageUrl(url: string | null | undefined): boolean {
+  const value = normalizeMediaUrl(url);
+  if (!value || !/^https:\/\//i.test(value)) return false;
+  try {
+    const parsed = new URL(value);
+    const host = parsed.hostname.toLowerCase();
+    const isSupabaseHost = host.endsWith('.supabase.co') || host.endsWith('.supabase.in');
+    return isSupabaseHost && parsed.pathname.startsWith('/storage/v1/object/public/');
+  } catch {
+    return false;
+  }
 }
 
 /**

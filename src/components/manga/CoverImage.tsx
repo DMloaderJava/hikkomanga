@@ -45,10 +45,13 @@ function reportCoverError(title: string, src: string) {
 /**
  * Единая точка рендера обложки тайтла — «никогда не битая картинка»:
  *
- *  1. src — обложки лежат в репозитории (public/media/covers/*.webp),
- *     в titles.cover_url — относительный путь /media/covers/{slug}.webp;
- *  2. при ошибке загрузки (файла нет, опечатка в пути) — плейсхолдер
- *     `/media/placeholder-cover.svg` + `data-cover-error` в DOM.
+ *  1. src — либо файл репозитория (public/media/covers/*.webp, в
+ *     titles.cover_url относительный путь /media/covers/{slug}.webp), либо
+ *     загруженная из админки обложка (публичный URL бакета Storage `covers`,
+ *     см. src/lib/coverUpload.ts);
+ *  2. при ошибке загрузки (файла нет, опечатка в пути, объект в Storage
+ *     удалён) — плейсхолдер `/media/placeholder-cover.svg` + `data-cover-error`
+ *     в DOM.
  *
  * При пустом src сразу плейсхолдер. SSR-safe: на этапе пререндера window не
  * нужен, onError на сервере не срабатывает, атрибуты детерминированы.

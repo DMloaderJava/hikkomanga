@@ -12,6 +12,9 @@
  *   1. ChapterForm: клик «Создать главу» → chapters.create → глава в списке;
  *   2. TitleForm: клик «Создать тайтл» → titles.create → тайтл в списке,
  *      cover_url-путь сохраняется как есть, ошибки валидации показываются;
+ *   2b. TitleForm: выбор файла в «Загрузить файл» → storage.uploadCover →
+ *      cover_url заполнен, PDF отклоняется с сообщением, «Создать тайтл»
+ *      сохраняет загруженную обложку;
  *   3. RequestForm: клик «Запросить…» → adminRequests.submit → «Заявка отправлена».
  */
 let JSDOM;
@@ -113,6 +116,22 @@ const submitForm = (form) =>
 
 const buttonByText = (text) =>
   [...root.querySelectorAll('button')].find((b) => b.textContent.includes(text));
+
+/**
+ * Дождаться, пока асинхронный обработчик (например загрузка обложки) дойдёт до
+ * state: React не ждёт наших промисов, поэтому крутим event loop внутри act,
+ * пока предикат не сработает. Возвращает результат последней проверки.
+ */
+async function waitFor(predicate, timeoutMs = 5000) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    if (predicate()) return true;
+  }
+  return predicate();
+}
 
 const { createServer } = await import('vite');
 const vite = await createServer({
@@ -226,6 +245,73 @@ try {
     check('инлайн-кнопка «Добавить» создаёт жанр', mockStore.getGenres().length === genresBefore + 1);
   }
 
+  // ── 2b. Кнопка «Загрузить файл»: обложка тайтла из файла ────────────────
+  // Демо-режим: Storage не настроен, поэтому uploadCover возвращает data-URL —
+  // но цепочка «выбрал файл → cover_url → Сохранить → titles.create» та же,
+  // что в проде с бакетом covers.
+  localStorage.removeItem('hikkomanga_title_draft_new');
+  await freshRoot();
+  let uploadedTitleInput = null;
+  await render(
+    React.createElement(TitleForm, {
+      allGenres: mockStore.getGenres(),
+      onSubmit: async (input) => {
+        await titles.create(input);
+        uploadedTitleInput = input;
+        return input;
+      },
+    })
+  );
+
+  const fileInput = root.querySelector('input[type="file"]');
+  check('input[type=file] для обложки на месте', Boolean(fileInput));
+  check(
+    'accept ограничен JPEG/PNG/WebP',
+    fileInput?.getAttribute('accept') === 'image/jpeg,image/png,image/webp',
+    fileInput?.getAttribute('accept') || '(нет)'
+  );
+  const uploadBtn = buttonByText('Загрузить файл');
+  check('кнопка «Загрузить файл» найдена и кликабельна', Boolean(uploadBtn) && !uploadBtn.disabled);
+
+  const coverField = () =>
+    [...root.querySelectorAll('input')].find((i) => i.placeholder === '/media/covers/slug.webp');
+  const chooseFile = (file) =>
+    act(async () => {
+      Object.defineProperty(fileInput, 'files', { value: [file], configurable: true });
+      fileInput.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+    });
+
+  const pngBytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3, 4]);
+  await chooseFile(new File([pngBytes], 'my-cover.png', { type: 'image/png' }));
+  // Загрузка асинхронная (prepareCoverImage → Storage/data-URL) — ждём state.
+  const filled = await waitFor(() => Boolean(coverField()?.value));
+  check(
+    'выбор файла заполнил cover_url (демо: data-URL, прод: URL бакета covers)',
+    filled && coverField().value.startsWith('data:image/png;base64,'),
+    coverField()?.value?.slice(0, 32) || '(пусто)'
+  );
+  check('форма сообщает, что файл загружен', /Загружен/i.test(root.textContent));
+
+  // Мусор вместо картинки: PDF → понятная ошибка, cover_url не портится.
+  const coverBeforeBad = coverField().value;
+  await chooseFile(new File([new Uint8Array(Buffer.from('%PDF-1.7'))], 'bad.pdf'));
+  const rejected = await waitFor(() => root.textContent.includes('Допустимы JPEG, PNG или WebP'));
+  check('не-картинка отклоняется с сообщением в форме', rejected);
+  check('после отказа cover_url остался прежним', coverField().value === coverBeforeBad);
+
+  await setValue(
+    [...root.querySelectorAll('input')].find((i) => i.placeholder?.includes('Магическая')),
+    'Загрузочный тайтл'
+  );
+  await submitForm(uploadBtn.closest('form'));
+  check(
+    'клик «Создать тайтл» донёс загруженную обложку до titles.create',
+    uploadedTitleInput?.cover_url?.startsWith('data:image/png;base64,'),
+    uploadedTitleInput?.cover_url?.slice(0, 32) || '(null)'
+  );
+  const uploadedTitle = (await titles.listAll()).find((t) => t.title === 'Загрузочный тайтл');
+  check('тайтл с загруженной обложкой реально появился в данных', Boolean(uploadedTitle));
+
   // ── 3. Кнопка заявки (RequestForm — ветка не-owner) ────────────────────
   await render(
     React.createElement(RequestForm, {
@@ -247,6 +333,7 @@ try {
   const createdCh = list1.find((c) => c.number === 7);
   if (createdCh) await chapters.delete(createdCh.id);
   if (createdTitle) await titles.delete(createdTitle.id);
+  if (uploadedTitle) await titles.delete(uploadedTitle.id);
 
   await act(async () => {
     reactRoot.unmount();

@@ -12,11 +12,14 @@ const SEED_VERSION = '4';
 const SEED_KEYS = ['manga_genres', 'manga_titles', 'manga_chapters', 'manga_pages'];
 
 /**
- * Обложки тайтлов — файлы в репозитории (public/media/covers/, генерируются
- * scripts/generate-seed-covers.mjs). В cover_url хранится относительный путь.
- * Для новых тайтлов админ указывает путь вручную в TitleForm; файл с таким
- * именем должен существовать в public/media/covers/ (иначе CoverImage
- * покажет плейсхолдер).
+ * Обложки тайтлов-сидов — файлы в репозитории (public/media/covers/,
+ * генерируются scripts/generate-seed-covers.mjs). В cover_url хранится
+ * относительный путь.
+ *
+ * Для новых тайтлов админ выбирает в TitleForm: «Загрузить файл» (картинка
+ * уходит в бакет Storage `covers`, в демо-режиме — в data-URL) или путь к
+ * файлу в public/media/covers/. Если ни того ни другого нет — CoverImage
+ * покажет плейсхолдер.
  */
 const cover = (slug: string) => `${import.meta.env?.BASE_URL ?? '/'}media/covers/${slug}.webp`;
 
