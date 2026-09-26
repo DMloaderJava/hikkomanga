@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { createFileRoute, Link } from '@tanstack/react-router';
 import { titles as titlesApi } from '@/data/titles';
 import { auth } from '@/data/auth';
@@ -49,20 +49,25 @@ function AdminTitlesIndexPage() {
   const [requestDeleteTarget, setRequestDeleteTarget] = useState<Title | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Title | null>(null);
   const [pendingToggleId, setPendingToggleId] = useState<string | null>(null);
+  const pendingToggleRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dialogError, setDialogError] = useState<string | null>(null);
 
-  const handleTogglePublish = async (id: string) => {
+  const handleSetPublished = async (id: string, published: boolean) => {
+    // ref, а не только state: второй клик до рендера не должен снять публикацию.
+    if (pendingToggleRef.current) return;
+    pendingToggleRef.current = id;
     setError(null);
     setPendingToggleId(id);
     try {
-      const updated = await titlesApi.togglePublish(id);
+      const updated = await titlesApi.setPublished(id, published);
       setTitleList((prev) => prev.map((t) => (t.id === id ? updated : t)));
     } catch (err: unknown) {
       setError(
         err instanceof Error ? err.message : 'Не удалось изменить статус публикации'
       );
     } finally {
+      pendingToggleRef.current = null;
       setPendingToggleId(null);
     }
   };
@@ -129,8 +134,8 @@ function AdminTitlesIndexPage() {
         />
       </div>
 
-      <div className="rounded-xl border border-neutral-800 bg-neutral-900/60 overflow-hidden shadow-xl">
-        <table className="w-full text-left text-sm text-neutral-200">
+      <div className="rounded-xl border border-neutral-800 bg-neutral-900/60 overflow-x-auto shadow-xl">
+        <table className="w-full min-w-[760px] text-left text-sm text-neutral-200">
           <thead className="bg-neutral-950/80 text-xs uppercase font-semibold text-neutral-400 border-b border-neutral-800">
             <tr>
               <th className="px-6 py-4">Обложка и название</th>
@@ -190,19 +195,31 @@ function AdminTitlesIndexPage() {
                 </td>
 
                 <td className="px-6 py-4">
-                  <div className="flex items-center gap-2">
-                    <Switch
-                      checked={t.published}
-                      disabled={pendingToggleId === t.id}
-                      onCheckedChange={() => handleTogglePublish(t.id)}
-                    />
-                    <span className="text-xs text-neutral-400">
-                      {pendingToggleId === t.id
-                        ? 'Сохранение...'
-                        : t.published
-                          ? 'Опубликован'
-                          : 'Черновик'}
-                    </span>
+                  <div className="flex flex-col items-start gap-2">
+                    <div className="flex items-center gap-2">
+                      <Switch
+                        checked={t.published}
+                        disabled={pendingToggleId === t.id}
+                        onCheckedChange={(next) => handleSetPublished(t.id, next)}
+                      />
+                      <span className="text-xs text-neutral-400">
+                        {pendingToggleId === t.id
+                          ? 'Сохранение...'
+                          : t.published
+                            ? 'В каталоге'
+                            : 'Черновик — не виден'}
+                      </span>
+                    </div>
+                    {!t.published && (
+                      <Button
+                        size="sm"
+                        className="h-7 text-xs"
+                        disabled={pendingToggleId === t.id}
+                        onClick={() => handleSetPublished(t.id, true)}
+                      >
+                        Опубликовать
+                      </Button>
+                    )}
                   </div>
                 </td>
 

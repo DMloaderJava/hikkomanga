@@ -3,6 +3,7 @@ import { createFileRoute, Link } from '@tanstack/react-router';
 import { titles as titlesApi } from '@/data/titles';
 import { chapters as chaptersApi } from '@/data/chapters';
 import { ChapterForm } from '@/components/admin/ChapterForm';
+import { PublishTitleBanner } from '@/components/admin/PublishTitleBanner';
 import { RequestForm } from '@/components/admin/RequestForm';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
@@ -50,6 +51,7 @@ function AdminTitleChaptersPage() {
     chapters: Chapter[];
     isOwner: boolean;
   };
+  const [titleState, setTitleState] = useState<Title>(title);
   const [chapterList, setChapterList] = useState<Chapter[]>(chapters);
   const [showAddForm, setShowAddForm] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -102,10 +104,11 @@ function AdminTitleChaptersPage() {
           </Link>
           <div>
             <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight flex items-center gap-2">
-              <Layers className="h-6 w-6 text-rose-500" /> Главы тайтла «{title.title}»
+              <Layers className="h-6 w-6 text-rose-500" /> Главы тайтла «{titleState.title}»
             </h1>
             <p className="text-xs text-neutral-400 mt-0.5">
               Всего глав: {chapterList.length}
+              {titleState.published ? ' · тайтл в каталоге' : ' · тайтл ещё черновик'}
             </p>
           </div>
         </div>
@@ -132,6 +135,8 @@ function AdminTitleChaptersPage() {
           </Button>
         </div>
       </div>
+
+      <PublishTitleBanner title={titleState} onChange={setTitleState} />
 
       {error && (
         <div className="flex items-center gap-2 rounded-xl border border-red-800/80 bg-red-950/40 p-3 text-sm text-red-400">

@@ -4,6 +4,34 @@ import { chapters as chaptersApi } from './chapters';
 import { normalizeMediaUrl } from '@/lib/storageUrl';
 import { type Title, type TitleInput, type Genre, SlugConflictError } from './types';
 
+function isMissingRpc(error: { code?: string; message?: string } | null): boolean {
+  if (!error) return false;
+  const msg = `${error.code ?? ''} ${error.message ?? ''}`;
+  return (
+    error.code === 'PGRST202' ||
+    error.code === '42883' ||
+    /could not find the function|schema cache|function .* does not exist|404/i.test(msg)
+  );
+}
+
+function publishFailureMessage(
+  error: { message?: string; hint?: string; code?: string },
+  published: boolean
+): string {
+  const raw = [error.message, error.hint].filter(Boolean).join(' — ');
+  if (/forbidden|permission|policy|row-level|42501/i.test(raw)) {
+    return (
+      'Нет прав менять публикацию тайтла. Нужна роль admin или owner в public.user_roles. ' +
+      'Если роль есть, выполните миграцию supabase/migrations/00000000000018_publish_title.sql в SQL Editor.'
+    );
+  }
+  if (/not_found|0 rows|PGRST116/i.test(raw)) {
+    return 'Тайтл не найден — возможно, его уже удалили.';
+  }
+  const action = published ? 'опубликовать тайтл' : 'снять тайтл с публикации';
+  return `Не удалось ${action}: ${raw || 'неизвестная ошибка'}`;
+}
+
 function normalizeTitleRow(row: any): Title {
   const genresList: Genre[] = row.title_genres
     ? row.title_genres.map((tg: any) => (tg.genres ? tg.genres : tg)).filter(Boolean)
@@ -75,8 +103,11 @@ export const titles = {
           .eq('slug', slug)
           .maybeSingle();
 
-        if (!error && data) {
-          return normalizeTitleRow(data);
+        // null — тайтла с таким slug нет. Нельзя падать в mockStore: сид с тем
+        // же slug дал бы ложный SlugConflictError и форма «Сохранить» не
+        // опубликовала бы настоящий тайтл.
+        if (!error) {
+          return data ? normalizeTitleRow(data) : null;
         }
       } catch {
         // Fallback
@@ -95,8 +126,8 @@ export const titles = {
           .eq('id', id)
           .maybeSingle();
 
-        if (!error && data) {
-          return normalizeTitleRow(data);
+        if (!error) {
+          return data ? normalizeTitleRow(data) : null;
         }
       } catch {
         // Fallback
@@ -162,13 +193,14 @@ export const titles = {
           ? { ...rawTitleData, cover_url: normalizeMediaUrl(rawTitleData.cover_url) }
           : rawTitleData;
 
+      let updatedRow: any = null;
       if (Object.keys(titleData).length > 0) {
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from('titles')
           .update(titleData)
           .eq('id', id)
           .select()
-          .single();
+          .maybeSingle();
 
         if (error) {
           if (error.code === '23505') {
@@ -176,6 +208,13 @@ export const titles = {
           }
           throw new Error(`Не удалось сохранить тайтл: ${error.message}`);
         }
+        if (!data) {
+          throw new Error(
+            'Не удалось сохранить тайтл: база не изменила строку (нет прав на UPDATE или тайтл удалён). ' +
+              'Для публикации выполните миграцию supabase/migrations/00000000000018_publish_title.sql.'
+          );
+        }
+        updatedRow = data;
       }
 
       if (genre_ids !== undefined) {
@@ -213,8 +252,11 @@ export const titles = {
       }
 
       const fresh = await this.getById(id);
-      if (!fresh) throw new Error('Тайтл не найден после сохранения');
-      return fresh;
+      // Запись уже прошла. Если перечитать карточку не вышло, не делаем вид,
+      // что сохранения не было — иначе повторный тогл снимет тайтл с публикации.
+      if (fresh) return fresh;
+      if (updatedRow) return normalizeTitleRow(updatedRow);
+      throw new Error('Тайтл не найден после сохранения');
     }
     return mockStore.updateTitle(id, input);
   },
@@ -247,9 +289,63 @@ export const titles = {
     mockStore.deleteTitle(id);
   },
 
+  /**
+   * Поставить статус публикации явно (не «переключить»).
+   * Сначала обычный UPDATE — его достаточно, если политика и GRANT в порядке.
+   * Если строка не изменилась (RLS вернул 0 строк), зовём set_title_published
+   * из миграции 18: она пишет флаг после проверки роли и не зависит от политики.
+   */
+  async setPublished(id: string, published: boolean): Promise<Title> {
+    if (!isSupabaseConfigured) {
+      return mockStore.updateTitle(id, { published });
+    }
+
+    const before = await this.getById(id);
+    const supabase = await getSupabase();
+    const direct = await supabase
+      .from('titles')
+      .update({ published })
+      .eq('id', id)
+      .select('id, published')
+      .maybeSingle();
+
+    const directOk = !direct.error && !!direct.data && direct.data.published === published;
+
+    if (!directOk) {
+      const rpc = await supabase.rpc('set_title_published', {
+        p_id: id,
+        p_published: published,
+      });
+      if (rpc.error) {
+        if (isMissingRpc(rpc.error)) {
+          if (direct.error) throw new Error(publishFailureMessage(direct.error, published));
+          throw new Error(
+            (published
+              ? 'Не удалось опубликовать тайтл: база не изменила строку. '
+              : 'Не удалось снять тайтл с публикации: база не изменила строку. ') +
+              'Выполните миграцию supabase/migrations/00000000000018_publish_title.sql в SQL Editor Supabase и повторите.'
+          );
+        }
+        throw new Error(publishFailureMessage(rpc.error, published));
+      }
+    }
+
+    const fresh = await this.getById(id);
+    if (fresh) {
+      if (fresh.published !== published) {
+        throw new Error(
+          'База не сохранила статус публикации. Проверьте триггеры на public.titles и роль admin/owner.'
+        );
+      }
+      return fresh;
+    }
+    if (before) return { ...before, published };
+    throw new Error('Статус публикации сохранён, но карточку не удалось перечитать. Обновите страницу.');
+  },
+
   async togglePublish(id: string): Promise<Title> {
     const current = await this.getById(id);
     if (!current) throw new Error('Тайтл не найден');
-    return this.update(id, { published: !current.published });
+    return this.setPublished(id, !current.published);
   },
 };

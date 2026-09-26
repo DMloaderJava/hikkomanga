@@ -120,6 +120,14 @@ check(
   'Конфликт номера главы — пропуск с отчётом, а не падение',
   importRouteSrc.includes('DuplicateChapterError') && /пропущена/.test(importRouteSrc)
 );
+const publishBannerSrc = readFileSync('src/components/admin/PublishTitleBanner.tsx', 'utf8');
+check(
+  'Черновик тайтла публикуется отдельной кнопкой, не только свитчем в таблице',
+  chaptersSrc.includes('PublishTitleBanner') &&
+    readFileSync('src/routes/admin.titles.$id.chapters.$cid.tsx', 'utf8').includes('PublishTitleBanner') &&
+    publishBannerSrc.includes('Опубликовать тайтл') &&
+    publishBannerSrc.includes('setPublished')
+);
 
 // ── 2. Рантайм-проверка валидатора параметров ──────────────────────────────
 const { isValidEntityId, assertEntityId } = await import('../src/lib/routeParams.ts').catch(

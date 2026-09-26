@@ -3,6 +3,7 @@ import { createFileRoute, useNavigate, Link } from '@tanstack/react-router';
 import { titles as titlesApi } from '@/data/titles';
 import { genres as genresApi } from '@/data/genres';
 import { TitleForm } from '@/components/admin/TitleForm';
+import { PublishTitleBanner } from '@/components/admin/PublishTitleBanner';
 import type { Title, TitleInput, Genre } from '@/data/types';
 import { ArrowLeft, Edit, Layers } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -23,6 +24,7 @@ export const Route = createFileRoute('/admin/titles/$id/')({
 
 function EditTitleIndexPage() {
   const { title, genres } = Route.useLoaderData() as { title: Title; genres: Genre[] };
+  const [titleState, setTitleState] = useState<Title>(title);
   const [allGenres, setAllGenres] = useState<Genre[]>(genres);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const navigate = useNavigate();
@@ -68,9 +70,11 @@ function EditTitleIndexPage() {
         </Link>
       </div>
 
+      <PublishTitleBanner title={titleState} onChange={setTitleState} />
+
       <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-6 shadow-xl backdrop-blur-xl">
         <TitleForm
-          initialData={title}
+          initialData={titleState}
           allGenres={allGenres}
           onSubmit={handleSubmit}
           onAddGenre={handleAddGenre}

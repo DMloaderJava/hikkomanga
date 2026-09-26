@@ -35,6 +35,9 @@ export function TitleForm({
   const [coverUrl, setCoverUrl] = useState(initialData?.cover_url || '');
   const [status, setStatus] = useState<'ongoing' | 'completed'>(initialData?.status || 'ongoing');
   const [published, setPublished] = useState(initialData?.published ?? true);
+  // Пока пользователь сам не правил slug, он всегда равен транслиту всего названия.
+  // Раньше эффект срабатывал только при пустом slug и застывал на первой букве.
+  const [slugTouched, setSlugTouched] = useState(false);
   const [selectedGenreIds, setSelectedGenreIds] = useState<string[]>(
     initialData?.genres.map((g) => g.id) || []
   );
@@ -79,12 +82,12 @@ export function TitleForm({
     }
   }, [title, slug, author, description, coverUrl, status, published, selectedGenreIds, draftStorageKey]);
 
-  // Auto-generate slug when creating
+  // Автослаг из всего названия, пока поле не трогали руками.
   useEffect(() => {
-    if (!isEditing && title && !slug) {
+    if (!isEditing && !slugTouched) {
       setSlug(slugify(title));
     }
-  }, [title, isEditing]);
+  }, [title, isEditing, slugTouched]);
 
   const handleRestoreDraft = () => {
     try {
@@ -92,7 +95,10 @@ export function TitleForm({
       if (saved) {
         const draft = JSON.parse(saved);
         if (draft.title !== undefined) setTitle(draft.title);
-        if (draft.slug !== undefined && !isEditing) setSlug(draft.slug);
+        if (draft.slug !== undefined && !isEditing) {
+          setSlug(draft.slug);
+          setSlugTouched(draft.slug !== slugify(draft.title || ''));
+        }
         if (draft.author !== undefined) setAuthor(draft.author);
         if (draft.description !== undefined) setDescription(draft.description);
         if (draft.coverUrl !== undefined) setCoverUrl(draft.coverUrl);
@@ -265,7 +271,11 @@ export function TitleForm({
             <Input
               id="slug"
               value={slug}
-              onChange={(e) => !isEditing && setSlug(e.target.value)}
+              onChange={(e) => {
+                if (isEditing) return;
+                setSlugTouched(true);
+                setSlug(e.target.value);
+              }}
               disabled={isEditing}
               placeholder="magicheskaya-bitva"
               className="mt-1.5 font-mono text-xs disabled:opacity-60"
@@ -310,11 +320,11 @@ export function TitleForm({
             </div>
 
             <div className="flex flex-col justify-center">
-              <Label className="mb-2">Опубликован</Label>
+              <Label className="mb-2">В каталоге</Label>
               <div className="flex items-center gap-3">
                 <Switch checked={published} onCheckedChange={setPublished} />
                 <span className="text-xs text-neutral-400">
-                  {published ? 'Виден читателям' : 'Черновик'}
+                  {published ? 'Опубликован — виден читателям' : 'Черновик — в каталоге не виден'}
                 </span>
               </div>
             </div>
