@@ -529,6 +529,48 @@ check(
   clsChallenge.errorKind
 );
 
+// 2d. Слетевшие EXECUTE-гранты: RPC отвечает 42501, письмо не уходит вообще.
+// Это реальный прод-кейс: «подтверждение входа не приходит», а причина —
+// permission denied for function has_role / create_login_challenge.
+const clsGrantsRole = notify.classifyEdgeFailure(
+  null,
+  500,
+  'role_check_failed: permission denied for function has_role'
+);
+check(
+  'classify permission denied for has_role → db-grants',
+  clsGrantsRole.errorKind === 'db-grants' &&
+    clsGrantsRole.error.includes('00000000000021_restore_function_grants.sql'),
+  clsGrantsRole.errorKind
+);
+
+const clsGrantsChallenge = notify.classifyEdgeFailure(
+  null,
+  500,
+  'permission denied for function create_login_challenge'
+);
+check(
+  'classify permission denied for create_login_challenge → db-grants',
+  clsGrantsChallenge.errorKind === 'db-grants',
+  clsGrantsChallenge.errorKind
+);
+
+const clsGrantsFromMessage = notify.classifyEdgeFailure(
+  new Error('permission denied for function has_role')
+);
+check(
+  'classify permission denied из message (без detail) → db-grants',
+  clsGrantsFromMessage.errorKind === 'db-grants',
+  clsGrantsFromMessage.errorKind
+);
+
+const clsJwtExpired = notify.classifyEdgeFailure(null, 401, 'JWT expired');
+check(
+  'classify обычная auth-ошибка НЕ db-grants',
+  clsJwtExpired.errorKind === 'other',
+  clsJwtExpired.errorKind
+);
+
 // ── 3. ads CRUD + legacy active:undefined ───────────────────────────────────
 store.clear();
 // legacy row without active

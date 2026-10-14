@@ -100,6 +100,16 @@ npm run check:supabase
     Сюда админка кладёт обложки, загруженные в TitleForm кнопкой «Загрузить
     файл». Пустой бакет `covers` миграция убирает. Без неё загрузка обложки
     падает с 400 «Bucket not found» → «Бакет `title-covers` не создан».
+13. `00000000000021_restore_function_grants.sql` — **возврат EXECUTE-прав** на
+    функции, от которых зависит вход и админские письма: `has_role`,
+    `resolve_login_challenge`, `latest_login_challenge_status`,
+    `create_login_challenge`, `set_title_published`, `check_ip_rate_limit`.
+    Файл идемпотентный. Нужен, когда проект отвечает
+    `42501 permission denied for function …`: функции существуют, но роли
+    `anon`/`authenticated` не могут их исполнять — тогда Login Guard падает
+    на первом же RPC и письмо подтверждения **не отправляется вообще**
+    (на форме — `errorKind: db-grants`). Симптом и порядок проверки —
+    «Диагностика: что означает ошибка входа» ниже.
 
 Если накатываете руками — держите файлы в репозитории в том же виде, чтобы
 Lovable не предложил «создать схему заново» и не наплодил дублей таблиц.
@@ -412,6 +422,7 @@ inline-скриптов). `style-src` оставляет `'unsafe-inline'` — T
 | `не задан OWNER_NOTIFY_EMAIL` / `не задан RESEND_API_KEY` (`secrets-missing`) | Функция задеплоена, но секретов нет | `supabase secrets set OWNER_NOTIFY_EMAIL=… RESEND_API_KEY=… --project-ref <ref>` |
 | `Resend не принял письмо: …` (`resend`) | Ключ/домен отправителя не прошли в Resend | Проверить `RESEND_API_KEY`; `onboarding@resend.dev` шлёт **только на адрес аккаунта** — иначе подтвердить домен и задать `OWNER_NOTIFY_FROM` |
 | `Не удалось достучаться до Edge Function … сетевая ошибка, блокировка или CORS` (`network`) | Запрос не дошёл до edge-гейтвея: DNS/CORS/файрвол/блокировщик (приходит как FunctionsFetchError без context/status) | Проверить доступность `<ref>.supabase.co`; curl-проверка ниже; если curl показывает 404 — задеплоить функцию; если 000 — чинить сеть. **Если домен не резолвится (NXDOMAIN) — проект удалён, а бандл собран со старым ref: см. «Если проект Supabase пересоздавали или удаляли»** |
+| `в базе слетели права на функции: … permission denied for function has_role` (или `create_login_challenge`) (`db-grants`, HTTP 500 `role_check_failed`) | На проекте слетели EXECUTE-гранты: миграции 03/04/08 выдали права явно, но на живом проекте их нет (ручной REVOKE, «harden functions» по Security Advisor или строки `GRANT` не выполнились при накатывании файла в SQL Editor). Edge-функция не может проверить роль и создать challenge → письмо не уходит вообще | Накатить `supabase/migrations/00000000000021_restore_function_grants.sql` (SQL Editor целиком или `supabase db query --linked -f …`). Проверка: `npm run check:supabase` → раздел 4 без ✗ (под anon-ключом должно быть `has_role → HTTP 200`, а не `permission denied`) |
 
 Быстрая самопроверка без браузера (функция жива ⇒ не 404). Ожидания по коду
 функций **разные**:
@@ -448,6 +459,38 @@ curl -s -X POST -H "Authorization: Bearer $ANON_KEY" \
 Письма от `onboarding@resend.dev` часто падают в спам; если письмо не
 приходит вовсе — почти наверняка `OWNER_NOTIFY_EMAIL` не совпадает с адресом
 аккаунта, в котором создан `RESEND_API_KEY` (см. таблицу выше, строка `resend`).
+
+Если письмо не приходит, проверяйте по порядку — первые два пункта чаще всего:
+
+1. **Гранты в базе.** `npm run check:supabase` → раздел 4 «Функции БД (RPC)».
+   Ответ `permission denied for function has_role` (SQLSTATE 42501) = EXECUTE-прав
+   нет, письмо **не отправляется вообще** (edge падает на первом RPC, форма
+   показывает `db-grants`). Лечится миграцией
+   `00000000000021_restore_function_grants.sql` — вставьте её целиком в SQL
+   Editor или выполните по одному файлу:
+   ```bash
+   supabase db query --linked -f supabase/migrations/00000000000021_restore_function_grants.sql
+   ```
+   Быстрая проба руками:
+   ```bash
+   curl -s -X POST -H "apikey: $ANON_KEY" -H 'Content-Type: application/json' \
+     -d '{"uid":"00000000-0000-0000-0000-000000000000","role_to_check":"admin"}' \
+     https://<ref>.supabase.co/rest/v1/rpc/has_role
+   # ок: 200 false;  сломанные гранты: 42501 «permission denied for function has_role»
+   ```
+2. **Что показывает сама форма `/admin/login`.** Плашка «Ожидаем подтверждение
+   из письма…» означает, что письмо **принято Resend** — дальше дело в доставке
+   (папка «Спам», фильтры у почтовика, не тот адрес в `OWNER_NOTIFY_EMAIL`).
+   Красная ошибка — смотри таблицу выше: она назовёт `errorKind`.
+3. **Resend: отправитель и аккаунт.** Ключ `RESEND_API_KEY` принадлежит аккаунту
+   с адресом X, а `onboarding@resend.dev` умеет писать только на X. Для другого
+   адреса подтвердите домен в Resend и задайте `OWNER_NOTIFY_FROM`
+   (`supabase secrets set OWNER_NOTIFY_FROM="Hikkomanga <login@yourdomain>"`).
+   Журнал отправок и статус (`delivered` / `bounced` / `spam`) видны в
+   resend.com → Emails — это быстрее, чем гадать по логам функции.
+4. **Деплой и секреты.** `supabase functions list`: `login-notify` и
+   `login-confirm` должны быть в списке. Без секретов функция отвечает
+   500/503 (`secrets-missing`) — тогда `node scripts/setup-login-guard.mjs …`.
 
 ### Если проект Supabase пересоздавали или удаляли
 
