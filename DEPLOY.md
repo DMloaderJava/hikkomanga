@@ -16,6 +16,12 @@ Supabase-проект: `islgkqdsztchzajnulof` (он же в `supabase/.temp/proj
 npm run check:supabase
 ```
 
+> Переезд на другой Supabase (доступ к текущему потерян, проект удаляют) —
+> отдельный runbook: [`docs/migrate-project.md`](./docs/migrate-project.md).
+> Схема одним файлом — `npm run bootstrap:sql` → `supabase/bootstrap.sql`,
+> перенос контента — `npm run migrate:project`, переключение репозитория —
+> `npm run switch:supabase -- --ref <новый-ref> --key <publishable>`.
+
 ## Порядок первого деплоя системы заявок (анонимные `new_title`)
 
 ### 1. Миграции Supabase
