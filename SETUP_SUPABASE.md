@@ -422,7 +422,7 @@ inline-скриптов). `style-src` оставляет `'unsafe-inline'` — T
 | `не задан OWNER_NOTIFY_EMAIL` / `не задан RESEND_API_KEY` (`secrets-missing`) | Функция задеплоена, но секретов нет | `supabase secrets set OWNER_NOTIFY_EMAIL=… RESEND_API_KEY=… --project-ref <ref>` |
 | `Resend не принял письмо: …` (`resend`) | Ключ/домен отправителя не прошли в Resend | Проверить `RESEND_API_KEY`; `onboarding@resend.dev` шлёт **только на адрес аккаунта** — иначе подтвердить домен и задать `OWNER_NOTIFY_FROM` |
 | `Не удалось достучаться до Edge Function … сетевая ошибка, блокировка или CORS` (`network`) | Запрос не дошёл до edge-гейтвея: DNS/CORS/файрвол/блокировщик (приходит как FunctionsFetchError без context/status) | Проверить доступность `<ref>.supabase.co`; curl-проверка ниже; если curl показывает 404 — задеплоить функцию; если 000 — чинить сеть. **Если домен не резолвится (NXDOMAIN) — проект удалён, а бандл собран со старым ref: см. «Если проект Supabase пересоздавали или удаляли»** |
-| `в базе слетели права на функции: … permission denied for function has_role` (или `create_login_challenge`) (`db-grants`, HTTP 500 `role_check_failed`) | На проекте слетели EXECUTE-гранты: миграции 03/04/08 выдали права явно, но на живом проекте их нет (ручной REVOKE, «harden functions» по Security Advisor или строки `GRANT` не выполнились при накатывании файла в SQL Editor). Edge-функция не может проверить роль и создать challenge → письмо не уходит вообще | Накатить `supabase/migrations/00000000000021_restore_function_grants.sql` (SQL Editor целиком или `supabase db query --linked -f …`). Проверка: `npm run check:supabase` → раздел 4 без ✗ (под anon-ключом должно быть `has_role → HTTP 200`, а не `permission denied`) |
+| `в базе слетели права на функции: … permission denied for function has_role` (или `create_login_challenge`) (`db-grants`, HTTP 500 `role_check_failed`) | На проекте слетели EXECUTE-гранты: миграции 03/04/08 выдали права явно, но на живом проекте их нет (ручной REVOKE, «harden functions» по Security Advisor или строки `GRANT` не выполнились при накатывании файла в SQL Editor). Edge-функция не может проверить роль и создать challenge → письмо не уходит вообще | Накатить `supabase/migrations/00000000000021_restore_function_grants.sql` (SQL Editor целиком или `supabase db query --linked -f …`); разбор вариантов «только SQL» — в разделе «Починка грантов только через SQL» ниже. Проверка: `npm run check:supabase` → раздел 4 без ✗ (под anon-ключом должно быть `has_role → HTTP 200`, а не `permission denied`) |
 
 Быстрая самопроверка без браузера (функция жива ⇒ не 404). Ожидания по коду
 функций **разные**:
@@ -491,6 +491,79 @@ curl -s -X POST -H "Authorization: Bearer $ANON_KEY" \
 4. **Деплой и секреты.** `supabase functions list`: `login-notify` и
    `login-confirm` должны быть в списке. Без секретов функция отвечает
    500/503 (`secrets-missing`) — тогда `node scripts/setup-login-guard.mjs …`.
+
+### Починка грантов только через SQL (SQL Editor, без CLI)
+
+Всё то же, что делает миграция `00000000000021_restore_function_grants.sql`,
+можно выполнить прямо в Supabase → **SQL Editor**. Порядок: проверить → выдать
+права → проверить ещё раз.
+
+**1. Диагностика — что именно сломано** (до починки в колонках `anon` /
+`authenticated` будет `false` там, где должно быть `true`):
+
+```sql
+select p.oid::regprocedure::text as signature,
+       has_function_privilege('anon',          p.oid, 'execute') as anon,
+       has_function_privilege('authenticated', p.oid, 'execute') as authenticated,
+       has_function_privilege('service_role',  p.oid, 'execute') as service_role
+from pg_proc p
+join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public'
+  and p.proname in ('has_role', 'create_login_challenge', 'resolve_login_challenge',
+                    'latest_login_challenge_status', 'set_title_published',
+                    'check_ip_rate_limit')
+order by 1;
+```
+
+Ожидаемое состояние: `has_role` — `anon = t`; `resolve_login_challenge` —
+`anon = t`; `create_login_challenge`, `latest_login_challenge_status`,
+`set_title_published` — `authenticated = t`; `check_ip_rate_limit` —
+`service_role = t` (для `anon` там `f` — так и задумано).
+
+**2. Починка — короткий вариант** (6 строк; если какая-то функция ещё не
+накатана, весь запрос упадёт — тогда выдавайте по одной строке или используйте
+DO-блок из миграции 21, он пропускает отсутствующие функции с `notice`):
+
+```sql
+grant execute on function public.has_role(uuid, text)                  to anon, authenticated;
+grant execute on function public.resolve_login_challenge(text, text)   to anon, authenticated;
+grant execute on function public.latest_login_challenge_status()       to authenticated;
+grant execute on function public.create_login_challenge(text, text, text, text, int, text)
+  to authenticated;
+grant execute on function public.set_title_published(uuid, boolean)    to authenticated;
+grant execute on function public.check_ip_rate_limit(text, int, int)   to service_role;
+```
+
+**3. Проверка после починки** (тот же запрос, что в п. 1 — все ожидаемые
+колонки должны стать `t`), либо без SQL, из браузера:
+
+```bash
+curl -s -X POST -H "apikey: $ANON_KEY" -H 'Content-Type: application/json' \
+  -d '{"uid":"00000000-0000-0000-0000-000000000000","role_to_check":"admin"}' \
+  https://<ref>.supabase.co/rest/v1/rpc/has_role
+# 200 false = права вернулись; 42501 = ещё нет
+npm run check:supabase   # раздел 4 должен стать без ✗
+```
+
+> Заодно эти гранты возвращают к жизни анонимные заявки: `submit-title` /
+> `submit-chapters` / `get-submission` считают лимит через
+> `check_ip_rate_limit` под `service_role`. Без EXECUTE форма заявок отвечает
+> `500 {"error":"internal","detail":"rate_limit_rpc: permission denied for
+> function check_ip_rate_limit"}` — то есть «заявка не отправляется» в проде
+> имеет ту же причину, что и пропавшее письмо входа.
+>
+> Как это произошло — отдельная проверка «а не слетели ли права на будущие
+> функции тоже» (необязательно):
+>
+> ```sql
+> select defaclrole::regrole as owner, defaclobjtype as kind, defaclacl as acl
+> from pg_default_acl
+> where defaclnamespace = 'public'::regnamespace;
+> ```
+> Если для `kind = 'f'` (functions) в ACL нет `anon`/`authenticated`/
+> `service_role`, то каждая НОВАЯ функция в `public` снова родится без прав —
+> тогда после наката любой миграции с функциями выдавайте GRANT явно (в
+> репозитории они уже выписаны в 03/04/08/12/18/21).
 
 ### Если проект Supabase пересоздавали или удаляли
 
