@@ -498,6 +498,27 @@ curl -s -X POST -H "Authorization: Bearer $ANON_KEY" \
 можно выполнить прямо в Supabase → **SQL Editor**. Порядок: проверить → выдать
 права → проверить ещё раз.
 
+**0. Убедитесь, что открыт проект прода** — самая частая ошибка: SQL выполняется
+в другом (старом/пустом) проекте аккаунта, запрос «Success», а прод не меняется.
+Сверьте ref в адресной строке дэшборда (`/project/<ref>/…`) с
+`VITE_SUPABASE_PROJECT_ID` из `.env.production` и прогоните «удостоверение
+личности» проекта:
+
+```sql
+select
+  (select count(*) from public.titles)                                     as titles,
+  (select count(*) from public.chapters)                                   as chapters,
+  to_regclass('public.user_api_keys') is not null                          as has_user_api_keys,
+  to_regprocedure('public.set_title_published(uuid,boolean)') is not null  as has_publish_fn,
+  to_regprocedure('public.check_ip_rate_limit(text,int,int)') is not null  as has_rate_limit_fn;
+```
+
+Прод-проект (`islgkqdsztchzajnulof`) на 2026-10: `titles` ≥ 3, `chapters` ≥ 33,
+все три флага `true`. Если видите `0 / 0 / false / false / false` — это **не
+прод**: переключите проект в левом верхнем меню дэшборда и повторите. В SQL
+Editor заодно виден и сам ref — в заголовке окна/URL: `supabase.com/dashboard/
+project/<ref>/sql/…`.
+
 **1. Диагностика — что именно сломано** (до починки в колонках `anon` /
 `authenticated` будет `false` там, где должно быть `true`):
 

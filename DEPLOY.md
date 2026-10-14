@@ -141,6 +141,13 @@ supabase functions deploy login-confirm
 
 ### 3a. Login Guard: «письмо подтверждения входа не приходит»
 
+> Перед накатом убедитесь, что открыт **прод-проект**: его ref виден в адресной
+> строке дэшборда (`/project/<ref>/sql/…`) и должен совпадать с
+> `VITE_SUPABASE_PROJECT_ID` из `.env.production` (`islgkqdsztchzajnulof`).
+> Проверка «удостоверения» проекта — запрос из SETUP_SUPABASE.md, раздел
+> «Починка грантов только через SQL», пункт 0: в пустом/старом проекте SQL
+> выполнится «успешно», но прод не изменится.
+
 Первое, что смотреть, — `npm run check:supabase`, раздел 4 «Функции БД (RPC)».
 Если там `permission denied for function has_role` (SQLSTATE 42501), на проекте
 слетели EXECUTE-гранты: edge-функция не может ни проверить роль, ни создать
