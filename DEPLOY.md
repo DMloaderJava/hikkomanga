@@ -16,6 +16,12 @@ Supabase-проект: `islgkqdsztchzajnulof` (он же в `supabase/.temp/proj
 npm run check:supabase
 ```
 
+> Переезд на другой Supabase (доступ к текущему потерян, проект удаляют) —
+> отдельный runbook: [`docs/migrate-project.md`](./docs/migrate-project.md).
+> Схема одним файлом — `npm run bootstrap:sql` → `supabase/bootstrap.sql`,
+> перенос контента — `npm run migrate:project`, переключение репозитория —
+> `npm run switch:supabase -- --ref <новый-ref> --key <publishable>`.
+
 ## Порядок первого деплоя системы заявок (анонимные `new_title`)
 
 ### 1. Миграции Supabase
@@ -30,6 +36,7 @@ SQL Editor → выполнить по порядку:
 - `supabase/migrations/00000000000015_chapter_submissions.sql` (заявки на главы)
 - `supabase/migrations/00000000000017_user_api_keys.sql` (персональные Gemini-ключи)
 - `supabase/migrations/00000000000018_publish_title.sql` (публикация тайтла, если переключатель не сохраняет `published`)
+- `supabase/migrations/00000000000021_restore_function_grants.sql` (возврат EXECUTE-прав, если `npm run check:supabase` показывает `permission denied for function …` — иначе Login Guard не отправит письмо)
 
 Отдельно, если `npm run check:supabase` показывает ✗ у бакета: выполнить
 `insert` из `00000000000002_storage_buckets.sql` (создаёт `manga` и
@@ -46,6 +53,7 @@ supabase db query --linked -f supabase/migrations/00000000000014_new_title_trigg
 supabase db query --linked -f supabase/migrations/00000000000015_chapter_submissions.sql
 supabase db query --linked -f supabase/migrations/00000000000017_user_api_keys.sql
 supabase db query --linked -f supabase/migrations/00000000000018_publish_title.sql
+supabase db query --linked -f supabase/migrations/00000000000021_restore_function_grants.sql
 ```
 
 > ⚠️ **`supabase db push` на этом проекте не работает.** Локальная история
@@ -136,6 +144,33 @@ supabase functions deploy login-confirm
 `chat` берёт ключ так: свой → ключ владельца проекта → ключ первого админа,
 у которого он сохранён (читателю свой ключ завести негде, но чат ему нужен);
 роль admin для чата не требуется, только авторизация.
+
+### 3a. Login Guard: «письмо подтверждения входа не приходит»
+
+> Перед накатом убедитесь, что открыт **прод-проект**: его ref виден в адресной
+> строке дэшборда (`/project/<ref>/sql/…`) и должен совпадать с
+> `VITE_SUPABASE_PROJECT_ID` из `.env.production` (`islgkqdsztchzajnulof`).
+> Проверка «удостоверения» проекта — запрос из SETUP_SUPABASE.md, раздел
+> «Починка грантов только через SQL», пункт 0: в пустом/старом проекте SQL
+> выполнится «успешно», но прод не изменится.
+
+Первое, что смотреть, — `npm run check:supabase`, раздел 4 «Функции БД (RPC)».
+Если там `permission denied for function has_role` (SQLSTATE 42501), на проекте
+слетели EXECUTE-гранты: edge-функция не может ни проверить роль, ни создать
+challenge, поэтому письмо **не отправляется вообще** (а в форме входа виден
+`errorKind: db-grants`). Лечение — один идемпотентный файл:
+
+```bash
+supabase db query --linked -f supabase/migrations/00000000000021_restore_function_grants.sql
+# либо вставить тот же файл целиком в SQL Editor
+```
+
+`supabase db push` для этого не нужен и на этом проекте не сработает (см.
+предупреждение выше). Если `check:supabase` чист, а письма всё равно нет —
+дальше по таблице `errorKind`-ов и чек-листу в `SETUP_SUPABASE.md` (раздел
+«Диагностика: что означает ошибка входа»): `secrets-missing` (нет
+`OWNER_NOTIFY_EMAIL` / `RESEND_API_KEY`), `resend` (onboarding@resend.dev шлёт
+только на адрес аккаунта Resend) или папка «Спам».
 
 ### 4. Vercel env + Redeploy
 

@@ -38,10 +38,16 @@ serve(async (req) => {
   );
   const { data: { user }, error: userError } = await supabase.auth.getUser();
   if (userError || !user) return json(401, { ok: false, error: 'Unauthorized' });
-  const { data: isAdmin } = await supabase.rpc('has_role', {
+  // Та же диагностика, что в login-notify: ошибку RPC (например, слетевшие
+  // EXECUTE-гранты → «permission denied for function has_role») отдаём наружу
+  // текстом, иначе заявка «одобрена», а письма нет и причина не видна.
+  const { data: isAdmin, error: roleError } = await supabase.rpc('has_role', {
     uid: user.id,
     role_to_check: 'admin',
   });
+  if (roleError) {
+    return json(500, { ok: false, error: `role_check_failed: ${roleError.message}` });
+  }
   if (!isAdmin) return json(403, { ok: false, error: 'Forbidden' });
 
   let body: { email?: string; status?: string; title?: string; reason?: string; siteUrl?: string } = {};

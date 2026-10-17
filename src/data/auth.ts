@@ -5,6 +5,7 @@ import {
   getLoginChallengeStatus,
   readLoginChallenge,
   clearLoginChallenge,
+  classifyEdgeFailure,
   type LoginNotifyResult,
 } from './notify';
 
@@ -90,6 +91,34 @@ async function requireLoginConfirmation(
   return { ok: true, notify };
 }
 
+/**
+ * Почему не подтвердилась роль админа — для точного текста ошибки на форме.
+ *
+ * `hasRole` намеренно глотает ошибку RPC (для роутинга это «нет доступа»), но
+ * при слетевших EXECUTE-грантах честного ответа «роли нет» не было — Postgres
+ * ответил «permission denied for function has_role». Показывать в этом случае
+ * «Нет прав администратора» нельзя: админ пойдёт выяснять права, а чинить надо
+ * гранты (миграция 21_restore_function_grants). Поэтому только на пути ошибки
+ * повторяем RPC и отдаём её текст.
+ */
+async function describeRoleCheckFailure(
+  userId: string
+): Promise<{ error: string; errorKind: LoginNotifyResult['errorKind'] } | null> {
+  if (!isSupabaseConfigured) return null;
+  try {
+    const supabase = await getSupabase();
+    const { error } = await supabase.rpc('has_role', {
+      uid: userId,
+      role_to_check: 'admin',
+    });
+    if (!error) return null;
+    const { error: message, errorKind } = classifyEdgeFailure(null, undefined, error.message);
+    return { error: message, errorKind };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : String(e), errorKind: 'other' };
+  }
+}
+
 export const auth = {
   /**
    * Подписка на локальные изменения auth-состояния (работает без загрузки Supabase SDK).
@@ -124,10 +153,28 @@ export const auth = {
             skipChallenge: true,
           });
           if (!isAdmin) {
+            // Роль не подтвердилась — но почему? Отличаем честное «роли нет»
+            // от сбоя проверки (в базе слетели EXECUTE-гранты → Postgres
+            // отвечает "permission denied for function has_role"). Иначе
+            // владелец видит «Нет прав администратора» и чинит не то.
+            const reason = await describeRoleCheckFailure(data.session.user.id);
             await this.signOut();
             return {
               data: { user: null, session: null },
-              error: new Error('Нет прав администратора'),
+              error: new Error(
+                reason
+                  ? `Не удалось проверить права администратора: ${reason.error}`
+                  : 'Нет прав администратора'
+              ),
+              ...(reason
+                ? {
+                    notify: {
+                      ok: false,
+                      error: reason.error,
+                      errorKind: reason.errorKind,
+                    } as LoginNotifyResult,
+                  }
+                : {}),
             };
           }
 

@@ -10,15 +10,24 @@
  *      и с .env.production (рассинхрон = прод смотрит в другой проект);
  *   2. резолвится ли <ref>.supabase.co (у удалённого проекта — NXDOMAIN);
  *   3. таблицы из supabase/migrations: чего нет и какой файл накатить;
- *   4. RPC Login Guard и has_role;
+ *   4. RPC Login Guard и has_role: 42501 «permission denied for function …»
+ *      ⇒ на проекте слетели EXECUTE-гранты (симптом «не приходит письмо
+ *      подтверждения входа»), лечится миграцией
+ *      00000000000021_restore_function_grants.sql;
  *   5. бакеты storage: manga, hikko-originals, voiceovers;
- *   6. Edge Functions login-notify / login-confirm / gemini-proxy /
- *      dialog-tts / chat / admin-api-keys:
+ *   6. Edge Functions login-notify / login-confirm / submit-title /
+ *      submit-chapters / get-submission / gemini-proxy / dialog-tts / chat /
+ *      admin-api-keys / notify-submitter / finalize-chapter-submission:
  *      401 без Authorization ⇒ задеплоена (шлюз), 404 ⇒ нет;
  *      400 на login-confirm с валидным ключом ⇒ код функции работает;
+ *      400 на submit-* и get-submission с публичным ключом ⇒ функция жива
+ *      (verify_jwt = false), 404 ⇒ не задеплоена;
  *      401 на gemini-*, dialog-tts и chat с публичным ключом ⇒ функция жива,
  *      задеплоена и отвечает своим телом `unauthorized` (verify_jwt = false
  *      в supabase/config.toml — иначе шлюз вернул бы 401 с пустым телом);
+ *      401 на notify-submitter / finalize-chapter-submission с публичным
+ *      ключом ⇒ функция задеплоена (тело не сверяем: 401 отдаёт либо шлюз
+ *      verify_jwt = true, либо код функции — важно лишь, что это не 404);
  *   7. настройки Auth: открытая регистрация, авто-подтверждение почты.
  *
  * Окружение читается так же, как сборкой (`loadEnv` + process.env), поэтому
@@ -103,26 +112,46 @@ const EXPECTED_TABLES = [
   ['user_api_keys', '00000000000017_user_api_keys.sql'],
 ];
 
-/** RPC → [тело запроса, допустимые статусы, файл миграции]. */
+/**
+ * RPC → [тело запроса, допустимые статусы, файл миграции, anonRequired].
+ *
+ * `anonRequired` = функция обязана работать под ПУБЛИЧНЫМ ключом (роль anon):
+ * так задумано миграциями, и от этого зависит вход (ссылка из письма
+ * открывается без сессии). Если проект отвечает
+ * `permission denied for function …` (SQLSTATE 42501) — на нём слетели
+ * EXECUTE-гранты; это ровно тот случай, когда «письмо подтверждения не
+ * приходит» (лечится миграцией 21_restore_function_grants.sql).
+ */
 const EXPECTED_RPCS = [
   [
     'has_role',
     { uid: '00000000-0000-0000-0000-000000000000', role_to_check: 'admin' },
     [200],
-    '00000000000000_init.sql',
+    '00000000000004_roles_and_requests.sql',
+    true,
   ],
-  ['latest_login_challenge_status', {}, [200], '00000000000003_login_challenges.sql'],
   [
     'resolve_login_challenge',
     { p_token: '0'.repeat(32), p_action: 'approve' },
     [200, 400],
     '00000000000003_login_challenges.sql',
+    true,
+  ],
+  // Обе — только для authenticated: под anon-ключом отказ (42501) или
+  // 'unauthenticated' нормален, важно лишь, что функция есть в схеме.
+  [
+    'latest_login_challenge_status',
+    {},
+    [200],
+    '00000000000008_login_challenge_multidevice.sql',
+    false,
   ],
   [
     'create_login_challenge',
     { p_token: '0'.repeat(32) },
     [400],
     '00000000000008_login_challenge_multidevice.sql',
+    false,
   ],
 ];
 
@@ -243,17 +272,31 @@ section('3. Таблицы (сверка с supabase/migrations)');
 section('4. Функции БД (RPC)');
 {
   const results = await Promise.all(
-    EXPECTED_RPCS.map(async ([rpc, body, allowed, file]) => ({
+    EXPECTED_RPCS.map(async ([rpc, body, allowed, file, anonRequired]) => ({
       rpc,
       allowed,
       file,
+      anonRequired,
       ...(await api(`/rest/v1/rpc/${rpc}`, { method: 'POST', body })),
     })),
   );
-  for (const { rpc, allowed, file, status, text } of results) {
+  for (const { rpc, allowed, file, anonRequired, status, text } of results) {
+    // Слетевшие EXECUTE-гранты: функция есть в схеме, но исполнять её нельзя.
+    // Именно так выглядит прод, в котором «не приходит письмо подтверждения».
+    if (/permission denied for function|42501/i.test(text)) {
+      if (anonRequired) {
+        bad(
+          `${rpc}: нет EXECUTE-прав для роли anon (permission denied for function)`,
+          'Накатите supabase/migrations/00000000000021_restore_function_grants.sql (вставить в SQL Editor или `supabase db query --linked -f …`). Без этих грантов Login Guard не может создать challenge — письмо подтверждения входа не отправляется вообще',
+        );
+      } else {
+        ok(`${rpc} закрыта для anon (ожидаемо: права только у authenticated)`);
+      }
+      continue;
+    }
     if (allowed.includes(status)) {
       ok(`${rpc} → HTTP ${status}`);
-    } else if (status === 404) {
+    } else if (status === 404 || /PGRST202/.test(text)) {
       bad(`${rpc} отсутствует в схеме`, `Накатите supabase/migrations/${file}`);
     } else {
       bad(`${rpc} → HTTP ${status}: ${text.slice(0, 120)}`, `Разберитесь с ${rpc} (ожидался статус ${allowed.join(' или ')})`);
@@ -297,6 +340,13 @@ section('6. Edge Functions');
 const FUNCTION_CHECKS = [
   ['login-notify', 401, null],
   ['login-confirm', 400, 'token and action=approve|deny required'],
+  // Публичные функции заявок (verify_jwt = false): пустое тело доходит до кода
+  // функции, поэтому 400 от неё = «задеплоена». 404 здесь особенно дорого
+  // стоит: без submit-chapters не работает «Предложить главу», без
+  // get-submission — страница статуса /s/{token}.
+  ['submit-title', 400, 'invalid_form'],
+  ['submit-chapters', 400, 'invalid_form'],
+  ['get-submission', 400, 'token and action=get|withdraw required'],
   // Gemini-функции закрыты ролью admin: с публичным ключом (это анонимный
   // пользователь) они обязаны вернуть 401 unauthorized. Так чекер проверяет
   // именно факт деплоя — без него «Supabase недоступен» на /admin/settings
@@ -305,6 +355,14 @@ const FUNCTION_CHECKS = [
   ['dialog-tts', 401, 'unauthorized'],
   ['chat', 401, 'unauthorized'],
   ['admin-api-keys', 401, 'unauthorized'],
+  // Админские функции писем и импорта глав: verify_jwt = true (config.toml),
+  // сессии пользователя у публичного ключа нет — 401. Тело не сверяем: его
+  // может отдать и шлюз, и сама функция (у обеих свой «Unauthorized»), а
+  // проверяем мы факт деплоя. Без notify-submitter заявитель не получает
+  // письмо о решении, без finalize-chapter-submission не импортируются главы
+  // при approve.
+  ['notify-submitter', 401, null],
+  ['finalize-chapter-submission', 401, null],
 ];
 for (const [fn, expectStatus, expectBody] of FUNCTION_CHECKS) {
   const noAuth = await api(`/functions/v1/${fn}`, { method: 'POST', body: {}, withAuth: false });

@@ -57,10 +57,18 @@ serve(async (req) => {
     return json(401, { ok: false, error: 'Unauthorized' });
   }
 
-  const { data: isAdmin } = await supabase.rpc('has_role', {
+  // Ошибку RPC не глотаем: при слетевших EXECUTE-грантах (permission denied for
+  // function has_role) isAdmin = null, и вход падал бы невнятным 403 «Forbidden»
+  // вместо реальной причины — «письмо не приходит», а что чинить, не видно.
+  // Текст ошибки отдаём клиенту: он покажет errorKind: 'db-grants'
+  // (см. classifyEdgeFailure в src/data/notify.ts) и точный путь починки.
+  const { data: isAdmin, error: roleError } = await supabase.rpc('has_role', {
     uid: user.id,
     role_to_check: 'admin',
   });
+  if (roleError) {
+    return json(500, { ok: false, error: `role_check_failed: ${roleError.message}` });
+  }
   if (!isAdmin) {
     return json(403, { ok: false, error: 'Forbidden' });
   }

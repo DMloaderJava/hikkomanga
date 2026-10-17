@@ -39,6 +39,14 @@ const OWNER_HINTS: Record<string, string> = {
     '  supabase functions deploy login-notify --project-ref <ref>\n' +
     '  supabase functions deploy login-confirm --project-ref <ref>\n' +
     'или выполните `node scripts/setup-login-guard.mjs ...` (SETUP_SUPABASE.md, раздел 6).',
+  'db-grants':
+    'В базе слетели EXECUTE-права на функции: RPC has_role/create_login_challenge ' +
+    'отвечают «permission denied for function …», поэтому письмо подтверждения ' +
+    'не отправляется вообще. Накатите миграцию (файл идемпотентный):\n' +
+    '  supabase/migrations/00000000000021_restore_function_grants.sql\n' +
+    '— вставьте её в SQL Editor или выполните\n' +
+    '  supabase db query --linked -f supabase/migrations/00000000000021_restore_function_grants.sql\n' +
+    'Проверка: `npm run check:supabase` → раздел 4 без ✗ (там же видно 42501).',
   'secrets-missing':
     'Задайте секреты проекта:\n' +
     '  supabase secrets set OWNER_NOTIFY_EMAIL=you@domain.tld RESEND_API_KEY=re_xxx --project-ref <ref>\n' +

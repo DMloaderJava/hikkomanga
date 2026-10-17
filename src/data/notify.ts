@@ -9,6 +9,8 @@ export type LoginNotifyErrorKind =
   | 'fn-not-deployed'
   /** OWNER_NOTIFY_EMAIL / RESEND_API_KEY не заданы в секретах Supabase. */
   | 'secrets-missing'
+  /** В базе слетели EXECUTE-гранты: RPC отвечает "permission denied for function". */
+  | 'db-grants'
   /** Resend отклонил запрос (ключ, домен отправителя, лимиты). */
   | 'resend'
   /** Сеть/браузер не достучались до функции. */
@@ -273,6 +275,23 @@ export function classifyEdgeFailure(
         `  curl -s -o /dev/null -w '%{http_code}\\n' -X POST https://${host}/functions/v1/login-notify\n` +
         '  401 → жива; 404 → не задеплоена; 000 → сеть/блокировка',
       errorKind: 'network',
+    };
+  }
+
+  // 1c) В базе слетели EXECUTE-права на функции: Postgres отвечает
+  //     "permission denied for function has_role" (SQLSTATE 42501). Проверка
+  //     роли и создание challenge живут в RPC, поэтому письмо не отправляется
+  //     вообще, а вход выглядит как «ничего не приходит». Лечится миграцией
+  //     00000000000021_restore_function_grants.sql.
+  if (/permission denied for function|42501/.test(d) || /permission denied for function|42501/.test(msg)) {
+    return {
+      error:
+        'в базе слетели права на функции: ' +
+        (detail || (error as Error)?.message || 'permission denied for function') +
+        '. Владелец: накатите supabase/migrations/00000000000021_restore_function_grants.sql ' +
+        '(SQL Editor или `supabase db query --linked -f …`) — без EXECUTE на has_role и ' +
+        'create_login_challenge письмо подтверждения отправить нельзя',
+      errorKind: 'db-grants',
     };
   }
 
